@@ -64,6 +64,7 @@ extern "C" s32 client_start() {
 
     sceSysmoduleLoadModule(ORBIS_SYSMODULE_NP_SCORE_RANKING);
     sceSysmoduleLoadModule(ORBIS_SYSMODULE_NP_MATCHING2);
+    sceSysmoduleLoadModule(ORBIS_SYSMODULE_NP_SIGNALING);
 
     // Init kernel and UserService hooks
     Libraries::Kernel::Kernel::RegisterHooks();

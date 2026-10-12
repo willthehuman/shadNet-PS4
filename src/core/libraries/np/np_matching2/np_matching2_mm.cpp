@@ -15,6 +15,7 @@
 #include "core/libraries/np/np_error.h"
 #include "core/libraries/np/np_matching2/np_matching2_internal.h"
 #include "core/libraries/np/np_matching2/np_matching2_mm.h"
+#include "core/libraries/np/np_signaling/np_signaling_stubs.h"
 #include "shadnet.pb.h"
 #include "shadnet/client.h"
 
@@ -660,9 +661,37 @@ void SetMmShadNetClient(std::shared_ptr<ShadNet::ShadNetClient> client,
     LOG_INFO(Lib_NpMatching2, "ShadNet features: matching2_enabled={} server={:#x} udp={}",
              matching2_enabled, server_addr, server_udp_port);
     if (!client) {
+        NpSignaling::Stubs::SetTransportHooks({});
+        NpSignaling::Stubs::SetPeerResolver(nullptr);
+        NpSignaling::Stubs::SetMatching2Enabled(false);
+        NpSignaling::Stubs::SetMmServerEndpoint(0, 0);
         return;
     }
-    // NOTE: signaling/UPnP wiring (Task 8) is not ported yet; room notifications are.
+
+    // Wire the signalling transport hooks (menu-stage wiring: the echo/ping
+    // paths must come up so the game's signalling context can initialize; the
+    // real peer data paths arrive with the P2P connection layer). Sends are
+    // reported accepted, receives look idle.
+    {
+        NpSignaling::Stubs::TransportHooks hooks{};
+        hooks.signaling_send = [](const void*, u32 len, u32, u16) -> int {
+            return static_cast<int>(len);
+        };
+        hooks.signaling_recv = [](void*, u32, u32*, u16*) -> int { return -1; };
+        hooks.control_send = [](const void*, u32 len, u32, u16) -> int {
+            return static_cast<int>(len);
+        };
+        hooks.control_recv = [](void*, u32, u32*, u16*) -> int { return -1; };
+        hooks.transport_ready = []() -> bool { return true; };
+        hooks.configured_port = []() -> u16 { return 0; };
+        hooks.advertised_addr = []() -> u32 { return 0; };
+        hooks.ensure_transport = []() -> bool { return true; };
+        NpSignaling::Stubs::SetTransportHooks(hooks);
+    }
+    NpSignaling::Stubs::SetPeerResolver(nullptr);
+    NpSignaling::Stubs::SetMatching2Enabled(matching2_enabled);
+    NpSignaling::Stubs::SetMmServerEndpoint(server_addr, server_udp_port);
+
     client->onRoomEvent = [](const ShadNet::NotifyRoomEvent& n) { HandleRoomEvent(n); };
     client->onRoomMessage = [](const ShadNet::NotifyRoomMessage& n) { HandleRoomMessage(n); };
 }
