@@ -18,6 +18,7 @@
 #include "common/elf_info.h"
 #include "core/libraries/np/np_error.h"
 #include "core/libraries/np/np_handler.h"
+#include "core/libraries/np/np_web_api/np_http_client.h"
 #include "core/libraries/np/np_web_api/np_web_api_internal.h"
 #include "shadnet/config.h"
 
@@ -823,19 +824,19 @@ s32 sendRequest(s64 requestId, s32 partIndex, const void* pData, u64 dataSize, s
     auto& config = ShadNet::Settings::GetInstance();
     if (request->http_request_id == 0) {
         std::string base_url = config.GetWebApiServerUrl();
-        const s32 tmpl_id = sceHttpCreateTemplate(context->libHttpCtxId, "libhttp", 2, 0);
+        const s32 tmpl_id = NpHttpCreateTemplate(context->libHttpCtxId, "libhttp", 2, 0);
         if (tmpl_id < 0) {
-            LOG_ERROR(Lib_NpWebApi, "sceHttpCreateTemplate failed: {:#x}", tmpl_id);
+            LOG_ERROR(Lib_NpWebApi, "NpHttpCreateTemplate failed: {:#x}", tmpl_id);
             releaseRequest(request);
             releaseUserContext(user_context);
             releaseContext(context);
             return tmpl_id;
         }
         request->http_template_id = tmpl_id;
-        const int conn_id = sceHttpCreateConnectionWithURL(tmpl_id, base_url.c_str(), true);
+        const int conn_id = NpHttpCreateConnectionWithURL(tmpl_id, base_url.c_str(), true);
         if (conn_id < 0) {
-            LOG_ERROR(Lib_NpWebApi, "sceHttpCreateConnectionWithURL failed: {:#x}", conn_id);
-            sceHttpDeleteTemplate(tmpl_id);
+            LOG_ERROR(Lib_NpWebApi, "NpHttpCreateConnectionWithURL failed: {:#x}", conn_id);
+            NpHttpDeleteTemplate(tmpl_id);
             request->http_template_id = 0;
             releaseRequest(request);
             releaseUserContext(user_context);
@@ -869,13 +870,13 @@ s32 sendRequest(s64 requestId, s32 partIndex, const void* pData, u64 dataSize, s
             return ORBIS_NP_WEBAPI_ERROR_INVALID_ARGUMENT;
         }
         const std::string full_url = base_url + request->userPath;
-        const int req_id = sceHttpCreateRequestWithURL(conn_id, sceMethod, full_url.c_str(),
+        const int req_id = NpHttpCreateRequestWithURL(conn_id, sceMethod, full_url.c_str(),
                                                        request->userContentLength);
         if (req_id < 0) {
-            LOG_ERROR(Lib_NpWebApi, "sceHttpCreateRequestWithURL failed: {:#x}", req_id);
-            sceHttpDeleteConnection(conn_id);
+            LOG_ERROR(Lib_NpWebApi, "NpHttpCreateRequestWithURL failed: {:#x}", req_id);
+            NpHttpDeleteConnection(conn_id);
             request->http_connection_id = 0;
-            sceHttpDeleteTemplate(tmpl_id);
+            NpHttpDeleteTemplate(tmpl_id);
             request->http_template_id = 0;
             releaseRequest(request);
             releaseUserContext(user_context);
@@ -885,14 +886,14 @@ s32 sendRequest(s64 requestId, s32 partIndex, const void* pData, u64 dataSize, s
         request->http_request_id = req_id;
 
         if (!request->userContentType.empty()) {
-            sceHttpAddRequestHeader(req_id, "Content-Type", request->userContentType.c_str(), 0);
+            NpHttpAddRequestHeader(req_id, "Content-Type", request->userContentType.c_str(), 0);
         }
 
         auto& np_handler = NpHandler::Instance();
         const std::string bearer = np_handler.GetBearerToken(user_context->userId);
         if (!bearer.empty()) {
             const std::string auth_value = "Bearer " + bearer;
-            sceHttpAddRequestHeader(req_id, "Authorization", auth_value.c_str(), 0);
+            NpHttpAddRequestHeader(req_id, "Authorization", auth_value.c_str(), 0);
         } else {
             LOG_WARNING(Lib_NpWebApi,
                         "no bearer token for user_id={}; request to '{}' will "
@@ -921,15 +922,15 @@ s32 sendRequest(s64 requestId, s32 partIndex, const void* pData, u64 dataSize, s
             if (haveContentType && isContentType(hname)) {
                 continue;
             }
-            sceHttpAddRequestHeader(req_id, hname.c_str(), hvalue.c_str(), 0);
+            NpHttpAddRequestHeader(req_id, hname.c_str(), hvalue.c_str(), 0);
         }
     }
 
     setRequestState(request, 4);
 
-    const s32 send_err = sceHttpSendRequest(request->http_request_id, sendData, sendSize);
+    const s32 send_err = NpHttpSendRequest(request->http_request_id, sendData, sendSize);
     if (send_err < 0) {
-        LOG_ERROR(Lib_NpWebApi, "sceHttpSendRequest failed: {:#x}", send_err);
+        LOG_ERROR(Lib_NpWebApi, "NpHttpSendRequest failed: {:#x}", send_err);
         releaseRequest(request);
         releaseUserContext(user_context);
         releaseContext(context);
@@ -943,7 +944,7 @@ s32 sendRequest(s64 requestId, s32 partIndex, const void* pData, u64 dataSize, s
     s32 sendResult = ORBIS_OK;
     if (flag != 0) {
         s32 status = 0;
-        if (sceHttpGetStatusCode(request->http_request_id, &status) >= 0) {
+        if (NpHttpGetStatusCode(request->http_request_id, &status) >= 0) {
             if (pRespInfoOption != nullptr) {
                 pRespInfoOption->http_status = status;
             }
@@ -951,7 +952,7 @@ s32 sendRequest(s64 requestId, s32 partIndex, const void* pData, u64 dataSize, s
                 std::string errBody;
                 char buf[256];
                 for (;;) {
-                    const s32 n = sceHttpReadData(request->http_request_id, buf, sizeof(buf));
+                    const s32 n = NpHttpReadData(request->http_request_id, buf, sizeof(buf));
                     if (n <= 0)
                         break;
                     errBody.append(buf, static_cast<size_t>(n));
@@ -1000,7 +1001,7 @@ s32 abortRequestInternal(OrbisNpWebApiContext* context, OrbisNpWebApiUserContext
 
     request->aborted = true;
     if (request->http_request_id) {
-        sceHttpAbortRequest(request->http_request_id);
+        NpHttpAbortRequest(request->http_request_id);
     }
     return ORBIS_OK;
 }
@@ -1072,15 +1073,15 @@ s32 deleteRequest(s64 requestId) {
 
     releaseRequest(request);
     if (request->http_request_id != 0) {
-        sceHttpDeleteRequest(request->http_request_id);
+        NpHttpDeleteRequest(request->http_request_id);
         request->http_request_id = 0;
     }
     if (request->http_connection_id != 0) {
-        sceHttpDeleteConnection(request->http_connection_id);
+        NpHttpDeleteConnection(request->http_connection_id);
         request->http_connection_id = 0;
     }
     if (request->http_template_id != 0) {
-        sceHttpDeleteTemplate(request->http_template_id);
+        NpHttpDeleteTemplate(request->http_template_id);
         request->http_template_id = 0;
     }
     user_context->requests.erase(request->requestId);
@@ -1883,7 +1884,7 @@ s32 getHttpResponseHeaderValueInternal(s64 requestId, const char* pFieldName, ch
     char* block = nullptr;
     u64 blockSize = 0;
     const s32 httpReqId = getHttpRequestIdFromRequest(request);
-    const s32 err = sceHttpGetAllResponseHeaders(httpReqId, &block, &blockSize);
+    const s32 err = NpHttpGetAllResponseHeaders(httpReqId, &block, &blockSize);
 
     s32 result = ORBIS_OK;
     if (err < 0) {
@@ -1930,7 +1931,7 @@ s32 PS4_SYSV_ABI getHttpStatusCodeInternal(s64 requestId, s32* out_status_code) 
     // Query HTTP layer
     {
         int32_t httpReqId = getHttpRequestIdFromRequest(request);
-        s32 err = sceHttpGetStatusCode(httpReqId, &status_code);
+        s32 err = NpHttpGetStatusCode(httpReqId, &status_code);
 
         if (out_status_code != nullptr)
             *out_status_code = status_code;
@@ -2028,7 +2029,7 @@ s32 PS4_SYSV_ABI readDataInternal(s64 requestId, void* pData, u64 size) {
 
             s32 httpReqId = getHttpRequestIdFromRequest(request);
             s32 httpRead =
-                sceHttpReadData(httpReqId, reinterpret_cast<u8*>(pData) + offset, remainingSize);
+                NpHttpReadData(httpReqId, reinterpret_cast<u8*>(pData) + offset, remainingSize);
 
             if (httpRead < 0)
                 httpRead = 0;
@@ -2049,7 +2050,7 @@ s32 PS4_SYSV_ABI readDataInternal(s64 requestId, void* pData, u64 size) {
         result = offset;
         if (offset > 0) {
             s32 sc = 0;
-            if (sceHttpGetStatusCode(getHttpRequestIdFromRequest(request), &sc) >= 0 && sc >= 400) {
+            if (NpHttpGetStatusCode(getHttpRequestIdFromRequest(request), &sc) >= 0 && sc >= 400) {
                 captureWebApiError(reinterpret_cast<const char*>(pData), offset);
             }
         }
