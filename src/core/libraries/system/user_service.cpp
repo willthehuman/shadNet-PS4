@@ -81,6 +81,22 @@ s32 sceUserServiceGetUserName(s32 user_id, char* user_name, u64 name_len) {
 
 s32 sceUserServiceGetEvent(OrbisUserServiceEvent* event) {
     s32 result = SHADNET_HOOK_CONTINUE(sceUserServiceGetEvent, event);
+    // v31: the REAL libSceUserService is never initialized on this console (the
+    // game's sceUserServiceInitialize call is answered locally by our hook), so
+    // the real GetEvent returned 0x80960002 (NOT_INITIALIZED) to every poller —
+    // thousands of log lines per session and a bogus error state for the
+    // shell's user-preference threads. Normalize to NO_EVENT (0x80960007), the
+    // true steady state (there are no PSN sign-in events to deliver anyway).
+    if (result == ORBIS_USER_SERVICE_ERROR_NOT_INITIALIZED) {
+        static u32 s_not_init_polls = 0;
+        ++s_not_init_polls;
+        if (s_not_init_polls <= 4 || (s_not_init_polls & 0x3FF) == 0) {
+            LOG_INFO(Lib_UserService,
+                     "GetEvent: real lib uninitialized -> NO_EVENT (n={}, further polls quiet)",
+                     s_not_init_polls);
+        }
+        return ORBIS_USER_SERVICE_ERROR_NO_EVENT;
+    }
     if (result == 0 && (event->event == 0 || event->event == 1)) {
         LOG_INFO(Lib_UserService, "Handling {} event", event->event == 0 ? "login" : "logout");
         Np::NpManager::UpdateNpStateFromEvent(event->event, event->userId);

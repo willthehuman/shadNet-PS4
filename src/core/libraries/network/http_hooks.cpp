@@ -101,10 +101,23 @@ static void LogHttpCall(const char* fn, s64 a1, s64 a2, s64 a3, s64 a4, s64 a5, 
 
 #define HTTP_TRACE_HOOK(name, s1, s2)                                                              \
     HOOK_INIT(name);                                                                               \
+    static u32 name##_count = 0;                                                                   \
     static s64 name##_hook(s64 a1, s64 a2, s64 a3, s64 a4, s64 a5, s64 a6, s64 a7, s64 a8) {       \
-        LogHttpCall(#name, a1, a2, a3, a4, a5, a6, a7, a8, s1, s2);                                \
+        const u32 n = ++name##_count;                                                              \
+        /* v31: the game pumps some of these (sceHttpWaitRequest ~3000x/session, likely per */     \
+        /* frame); full logging there cost ~2 slow console-log writes per pump and tanked fps. */  \
+        const bool verbose = (n <= 32) || ((n & 0x7F) == 0);                                       \
+        if (verbose) {                                                                             \
+            LogHttpCall(#name, a1, a2, a3, a4, a5, a6, a7, a8, s1, s2);                            \
+        }                                                                                          \
         const s64 rc = SHADNET_HOOK_CONTINUE(name, a1, a2, a3, a4, a5, a6, a7, a8);                \
-        LOG_INFO(Lib_HttpHook, "httphook: {} -> {:#x}", #name, static_cast<u64>(rc));              \
+        if (verbose) {                                                                             \
+            LOG_INFO(Lib_HttpHook, "httphook: {} [n={}] -> {:#x}", #name, n,                       \
+                     static_cast<u64>(rc));                                                        \
+        } else if ((n & 0x3FF) == 0) {                                                             \
+            LOG_INFO(Lib_HttpHook, "httphook: {} [n={}] last rc={:#x} (rate-limited)", #name, n,   \
+                     static_cast<u64>(rc));                                                        \
+        }                                                                                          \
         return rc;                                                                                 \
     }
 
