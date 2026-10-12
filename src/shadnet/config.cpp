@@ -65,7 +65,15 @@ void Settings::Initialize() {
         }
 
         nlohmann::json gj;
-        in >> gj;
+        try {
+            in >> gj;
+        } catch (const std::exception& e) {
+            // Fail safe: malformed config must not crash the game and must not enable
+            // anything implicitly. All per-user settings stay at defaults (disabled).
+            LOG_CRITICAL(Config, "Malformed config file {}: {} — shadNet stays disabled",
+                         config_path, e.what());
+            return;
+        }
         OrbisUserServiceLoginUserIdList user_list{};
         s32 result = sceUserServiceGetLoginUserIdList(&user_list);
         if (result != 0) {
