@@ -16,9 +16,18 @@ static inline bool IsPlausibleString(const char* p) {
 
 HOOK_INIT(socket);
 s32 socket_hook(s32 family, s32 type, s32 protocol) {
-    const s32 rc = SHADNET_HOOK_CONTINUE(socket, family, type, protocol);
-    LOG_INFO(Lib_Kernel, "socket(family={}, type={}, protocol={}) -> {} [errno={}]", family, type,
-             protocol, rc, errno);
+    // The game's network layer (extnetwork2) creates type-6 P2P datagram
+    // sockets ("...udpp2p..."), which on a jailbroken console land on the real
+    // (dead-end) Sony P2P stack. Bridge them to plain UDP sockets: same
+    // datagram semantics for LAN play, and the fd flows back through libSceNet
+    // normally.
+    s32 effective_type = type;
+    if (family == 2 && type == 6) {
+        effective_type = 2; // SOCK_DGRAM
+    }
+    const s32 rc = SHADNET_HOOK_CONTINUE(socket, family, effective_type, protocol);
+    LOG_INFO(Lib_Kernel, "socket(family={}, type={}{}, protocol={}) -> {} [errno={}]", family, type,
+             type != effective_type ? " -> bridged to DGRAM" : "", protocol, rc, errno);
     return rc;
 }
 
@@ -62,15 +71,24 @@ s64 recvfrom_hook(s32 fd, void* buf, u64 len, s32 flags, void* addr, u32* addrle
 
 HOOK_INIT(__sys_socketex);
 s32 __sys_socketex_hook(const char* name, s32 family, s32 type, s32 protocol) {
-    if (IsPlausibleString(name)) {
-        LOG_INFO(Lib_Kernel, "called, name = {}, family = {}, type = {}, protocol = {}", name,
-                 family, type, protocol);
-    } else {
-        LOG_WARNING(Lib_Kernel,
-                    "called, name = <bad ptr {:#x}>, family = {}, type = {}, protocol = {}",
-                    reinterpret_cast<std::uintptr_t>(name), family, type, protocol);
+    // Same type-6 -> UDP bridge as socket_hook (libSceNet routes named
+    // creations through here).
+    s32 effective_type = type;
+    if (family == 2 && type == 6) {
+        effective_type = 2; // SOCK_DGRAM
     }
-    return SHADNET_HOOK_CONTINUE(__sys_socketex, name, family, type, protocol);
+    s32 rc;
+    if (IsPlausibleString(name)) {
+        rc = SHADNET_HOOK_CONTINUE(__sys_socketex, name, family, effective_type, protocol);
+        LOG_INFO(Lib_Kernel, "socketex(name={}, family={}, type={}{}) -> {}", name, family, type,
+                 type != effective_type ? " -> bridged to DGRAM" : "", rc);
+    } else {
+        rc = SHADNET_HOOK_CONTINUE(__sys_socketex, name, family, effective_type, protocol);
+        LOG_WARNING(Lib_Kernel,
+                    "socketex(name=<bad ptr {:#x}>, family={}, type={}) -> {}",
+                    reinterpret_cast<std::uintptr_t>(name), family, type, rc);
+    }
+    return rc;
 }
 
 void RegisterKernelHooks() {
