@@ -8,6 +8,8 @@
 #include "common/singleton.h"
 // error_codes.h: superseded by plugin-side error headers
 #include "common/plugin_common.h"
+#include <orbis/Sysmodule.h>
+#include <orbis/libkernel.h>
 #include "core/libraries/network/net_shim.h"
 #include "core/libraries/network/net_util.h"
 #include "core/libraries/network/netctl.h"
@@ -876,31 +878,64 @@ sceNpSignalingGetConnectionStatistics(OrbisNpSignalingConnectionStatistics* stat
     return ORBIS_OK;
 }
 
+// libSceNpSignaling is a lazily-loaded sysmodule. The plugin's own imports for
+// its exports resolve when the plugin loads - before that sysmodule exists -
+// so detouring through the import symbols lands on unresolved stubs and never
+// fires. Resolve each export at runtime with sceKernelDlsym (after loading
+// the sysmodule) and install the detours on the real function addresses.
 void RegisterLibraryHooks() {
-    SHADNET_HOOK(Libraries::Np::NpSignaling, sceNpSignalingActivateConnection);
-    SHADNET_HOOK(Libraries::Np::NpSignaling, sceNpSignalingActivateConnectionA);
-    SHADNET_HOOK(Libraries::Np::NpSignaling, sceNpSignalingCancelPeerNetInfo);
-    SHADNET_HOOK(Libraries::Np::NpSignaling, sceNpSignalingCreateContext);
-    SHADNET_HOOK(Libraries::Np::NpSignaling, sceNpSignalingCreateContextA);
-    SHADNET_HOOK(Libraries::Np::NpSignaling, sceNpSignalingDeactivateConnection);
-    SHADNET_HOOK(Libraries::Np::NpSignaling, sceNpSignalingDeleteContext);
-    SHADNET_HOOK(Libraries::Np::NpSignaling, sceNpSignalingGetConnectionFromNpId);
-    SHADNET_HOOK(Libraries::Np::NpSignaling, sceNpSignalingGetConnectionFromPeerAddress);
-    SHADNET_HOOK(Libraries::Np::NpSignaling, sceNpSignalingGetConnectionFromPeerAddressA);
-    SHADNET_HOOK(Libraries::Np::NpSignaling, sceNpSignalingGetConnectionInfo);
-    SHADNET_HOOK(Libraries::Np::NpSignaling, sceNpSignalingGetConnectionInfoA);
-    SHADNET_HOOK(Libraries::Np::NpSignaling, sceNpSignalingGetConnectionStatistics);
-    SHADNET_HOOK(Libraries::Np::NpSignaling, sceNpSignalingGetConnectionStatus);
-    SHADNET_HOOK(Libraries::Np::NpSignaling, sceNpSignalingGetContextOption);
-    SHADNET_HOOK(Libraries::Np::NpSignaling, sceNpSignalingGetLocalNetInfo);
-    SHADNET_HOOK(Libraries::Np::NpSignaling, sceNpSignalingGetMemoryInfo);
-    SHADNET_HOOK(Libraries::Np::NpSignaling, sceNpSignalingGetPeerNetInfo);
-    SHADNET_HOOK(Libraries::Np::NpSignaling, sceNpSignalingGetPeerNetInfoA);
-    SHADNET_HOOK(Libraries::Np::NpSignaling, sceNpSignalingGetPeerNetInfoResult);
-    SHADNET_HOOK(Libraries::Np::NpSignaling, sceNpSignalingInitialize);
-    SHADNET_HOOK(Libraries::Np::NpSignaling, sceNpSignalingSetContextOption);
-    SHADNET_HOOK(Libraries::Np::NpSignaling, sceNpSignalingTerminate);
-    SHADNET_HOOK(Libraries::Np::NpSignaling, sceNpSignalingTerminateConnection);
+    const s32 module = sceSysmoduleLoadModule(ORBIS_SYSMODULE_NP_SIGNALING);
+    if (module < 0) {
+        LOG_ERROR(Lib_NpSignaling,
+                  "cannot load libSceNpSignaling sysmodule ({:#x}); signalling hooks not "
+                  "installed",
+                  static_cast<u32>(module));
+        return;
+    }
+    LOG_INFO(Lib_NpSignaling, "NP_SIGNALING module handle = {:#x}", module);
+
+#define SIGNALING_HOOK(name)                                                                       \
+    do {                                                                                           \
+        void* addr = nullptr;                                                                      \
+        if (sceKernelDlsym(module, #name, &addr) == 0 && addr != nullptr) {                        \
+            Detour_Construct(&Detour_##name, DetourMode_x64);                                      \
+            Detour_DetourFunction(                                                                 \
+                &Detour_##name, reinterpret_cast<uint64_t>(addr),                                  \
+                reinterpret_cast<void*>(                                                           \
+                    (decltype(&Libraries::Np::NpSignaling::name))name##_hook));                    \
+            LOG_INFO(Lib_NpSignaling, "hooked " #name " @ {:#x}",                                  \
+                     reinterpret_cast<uint64_t>(addr));                                            \
+        } else {                                                                                   \
+            LOG_ERROR(Lib_NpSignaling, "dlsym failed for " #name);                                 \
+        }                                                                                          \
+    } while (0)
+
+    SIGNALING_HOOK(sceNpSignalingActivateConnection);
+    SIGNALING_HOOK(sceNpSignalingActivateConnectionA);
+    SIGNALING_HOOK(sceNpSignalingCancelPeerNetInfo);
+    SIGNALING_HOOK(sceNpSignalingCreateContext);
+    SIGNALING_HOOK(sceNpSignalingCreateContextA);
+    SIGNALING_HOOK(sceNpSignalingDeactivateConnection);
+    SIGNALING_HOOK(sceNpSignalingDeleteContext);
+    SIGNALING_HOOK(sceNpSignalingGetConnectionFromNpId);
+    SIGNALING_HOOK(sceNpSignalingGetConnectionFromPeerAddress);
+    SIGNALING_HOOK(sceNpSignalingGetConnectionFromPeerAddressA);
+    SIGNALING_HOOK(sceNpSignalingGetConnectionInfo);
+    SIGNALING_HOOK(sceNpSignalingGetConnectionInfoA);
+    SIGNALING_HOOK(sceNpSignalingGetConnectionStatistics);
+    SIGNALING_HOOK(sceNpSignalingGetConnectionStatus);
+    SIGNALING_HOOK(sceNpSignalingGetContextOption);
+    SIGNALING_HOOK(sceNpSignalingGetLocalNetInfo);
+    SIGNALING_HOOK(sceNpSignalingGetMemoryInfo);
+    SIGNALING_HOOK(sceNpSignalingGetPeerNetInfo);
+    SIGNALING_HOOK(sceNpSignalingGetPeerNetInfoA);
+    SIGNALING_HOOK(sceNpSignalingGetPeerNetInfoResult);
+    SIGNALING_HOOK(sceNpSignalingInitialize);
+    SIGNALING_HOOK(sceNpSignalingSetContextOption);
+    SIGNALING_HOOK(sceNpSignalingTerminate);
+    SIGNALING_HOOK(sceNpSignalingTerminateConnection);
+
+#undef SIGNALING_HOOK
 }
 
 void RegisterHooks() {
