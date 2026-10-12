@@ -7,6 +7,7 @@
 #include <string>
 #include <sys/socket.h>
 
+#include "common/hook_diag.h"
 #include "common/logging/log.h"
 #include "core/libraries/kernel/kernel.h"
 
@@ -180,15 +181,25 @@ s32 __sys_socketex_hook(const char* name, s32 family, s32 type, s32 protocol) {
 
 void RegisterKernelHooks() {
     HOOK(socket);
+    ShadNetLogHookInstall("kernel.socket", &Detour_socket);
     HOOK(__sys_socketex);
+    ShadNetLogHookInstall("kernel.__sys_socketex", &Detour___sys_socketex);
     HOOK(bind);
+    ShadNetLogHookInstall("kernel.bind", &Detour_bind);
     HOOK(connect);
+    ShadNetLogHookInstall("kernel.connect", &Detour_connect);
     HOOK(setsockopt);
+    ShadNetLogHookInstall("kernel.setsockopt", &Detour_setsockopt);
     HOOK(getsockopt);
+    ShadNetLogHookInstall("kernel.getsockopt", &Detour_getsockopt);
     HOOK(getsockname);
+    ShadNetLogHookInstall("kernel.getsockname", &Detour_getsockname);
     HOOK(getpeername);
+    ShadNetLogHookInstall("kernel.getpeername", &Detour_getpeername);
     HOOK(sendto);
+    ShadNetLogHookInstall("kernel.sendto", &Detour_sendto);
     HOOK(recvfrom);
+    ShadNetLogHookInstall("kernel.recvfrom", &Detour_recvfrom);
 }
 
 namespace Libraries::Kernel::Kernel {

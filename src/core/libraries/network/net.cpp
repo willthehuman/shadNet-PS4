@@ -6,6 +6,7 @@
 #include <cstring>
 #include <orbis/Net.h>
 
+#include "common/hook_diag.h"
 #include "common/logging/log.h"
 #include "core/libraries/network/net.h"
 
@@ -20,8 +21,21 @@ static inline bool IsPlausibleString(const char* p) {
 // sceNet error numbers are 0x80410100 + errno; EINVAL = 22.
 static constexpr s32 kSceNetErrorEINVAL = 0x80410116;
 
+// v27 diag: how many sceNetSocket continuations are currently on this call
+// stack. If the resolver junk-path fires while this is nonzero, the resolver
+// hook was entered *from inside* a socket-call continuation (misrouted stub).
+static std::uint32_t g_sock_continuation_depth = 0;
+
 HOOK_INIT(sceNetSocket);
 s32 sceNetSocket_hook(const char* name, s32 family, s32 type, s32 protocol) {
+    // v27: capture entry context. The continuation call below runs the detour
+    // stub — a verbatim copy of the real function's first bytes — so the entry
+    // return address + stack pointer tell us exactly who reached the hooked
+    // function and whether the result later shows up mangled.
+    const auto entry_ret = reinterpret_cast<std::uintptr_t>(__builtin_return_address(0));
+    std::uintptr_t entry_rsp = 0;
+    asm volatile("movq %%rsp, %0" : "=r"(entry_rsp));
+    ++g_sock_continuation_depth;
     // Bridge type-6 P2P datagram sockets to plain UDP at the library level too:
     // libSceNet does P2P-specific setup on the fd that a bridged kernel socket
     // cannot satisfy (the game retried creation 7x in the trace). Passing type 2
@@ -39,12 +53,32 @@ s32 sceNetSocket_hook(const char* name, s32 family, s32 type, s32 protocol) {
                     reinterpret_cast<std::uintptr_t>(name), family, type,
                     type != effective_type ? " -> bridged to DGRAM" : "", protocol);
     }
-    return SHADNET_HOOK_CONTINUE(sceNetSocket, name, family, effective_type, protocol);
+    const s32 result = SHADNET_HOOK_CONTINUE(sceNetSocket, name, family, effective_type, protocol);
+    // v27: the value the game actually receives. If this is an error for the
+    // game's P2P socket creation, the failure lives *inside our continuation*.
+    LOG_INFO(Lib_Net, "depth={} result={:#x} entry_ret={:#x} entry_rsp={:#x}",
+             g_sock_continuation_depth, static_cast<std::uint32_t>(result), entry_ret, entry_rsp);
+    --g_sock_continuation_depth;
+    return result;
 }
 
 HOOK_INIT(sceNetResolverStartNtoa);
 s32 sceNetResolverStartNtoa_hook(s32 rid, const char* hostname, OrbisNetInAddr* addr, s32 timeout,
                                  s32 retry, s32 flags) {
+    // v27: capture full 64-bit entry registers before anything else runs. The
+    // typed parameters above truncate to 32 bits; the raw values distinguish
+    // "junk argument" from "valid pointer whose low half looks small".
+    std::uintptr_t r_rdi = 0, r_rsi = 0, r_rdx = 0, r_rcx = 0, r_r8 = 0, r_r9 = 0;
+    std::uintptr_t r_rsp = 0, r_rbp = 0, r_rip = 0;
+    asm volatile("movq %%rdi, %0" : "=r"(r_rdi));
+    asm volatile("movq %%rsi, %0" : "=r"(r_rsi));
+    asm volatile("movq %%rdx, %0" : "=r"(r_rdx));
+    asm volatile("movq %%rcx, %0" : "=r"(r_rcx));
+    asm volatile("movq %%r8, %0" : "=r"(r_r8));
+    asm volatile("movq %%r9, %0" : "=r"(r_r9));
+    asm volatile("movq %%rsp, %0" : "=r"(r_rsp));
+    asm volatile("movq %%rbp, %0" : "=r"(r_rbp));
+    asm volatile("lea 0(%%rip), %0" : "=r"(r_rip));
     if (!IsPlausibleString(hostname)) {
         // Never forward a junk pointer into the real resolver — it dereferences it.
         // RAW X-RAY: dump everything needed to identify this call offline —
@@ -64,6 +98,13 @@ s32 sceNetResolverStartNtoa_hook(s32 rid, const char* hostname, OrbisNetInAddr* 
                     reinterpret_cast<std::uintptr_t>(addr), static_cast<std::uint32_t>(timeout),
                     static_cast<std::uint32_t>(retry), static_cast<std::uint32_t>(flags), caller,
                     codebytes);
+        // v27: full-width registers + stack anchors + whether a socket-call
+        // continuation was on the stack when this fired.
+        LOG_WARNING(Lib_Net,
+                    "raw64 rdi={:#x} rsi={:#x} rdx={:#x} rcx={:#x} r8={:#x} r9={:#x} rsp={:#x} "
+                    "rbp={:#x} rip={:#x} sockdepth={}",
+                    r_rdi, r_rsi, r_rdx, r_rcx, r_r8, r_r9, r_rsp, r_rbp, r_rip,
+                    g_sock_continuation_depth);
         std::uintptr_t stack[16]{};
         std::uintptr_t sp = 0;
         asm volatile("movq %%rsp, %0" : "=r"(sp));
@@ -108,7 +149,9 @@ s32 sceNetResolverStartNtoa_hook(s32 rid, const char* hostname, OrbisNetInAddr* 
 
 void RegisterNetHooks() {
     HOOK(sceNetSocket);
+    ShadNetLogHookInstall("net.sceNetSocket", &Detour_sceNetSocket);
     HOOK(sceNetResolverStartNtoa);
+    ShadNetLogHookInstall("net.sceNetResolverStartNtoa", &Detour_sceNetResolverStartNtoa);
     // NOTE (2026-10-12): do NOT detour sceNetResolverCreate/Destroy. A build that
     // registered them made the plugin's own first resolver call return 0x804101C8
     // (the lazily-bound import breaks when its first call lands on a fresh
