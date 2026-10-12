@@ -27,11 +27,20 @@ public:
     };
 
     bool IsSignedIn(s32 user_id) {
-        return m_clients[user_id]->IsAuthenticated();
+        // Never use operator[] here: for an unknown user it would insert a null
+        // shared_ptr and null->IsAuthenticated() crashes the game (CE-34878-0,
+        // read at 0x223 = null + member offset). find() + null check instead.
+        std::lock_guard lock(m_mutex_clients);
+        auto it = m_clients.find(user_id);
+        return it != m_clients.end() && it->second != nullptr && it->second->IsAuthenticated();
     };
 
-    OrbisNpId& GetNpId(s32 user_id) {
-        return m_np_ids[user_id];
+    OrbisNpId GetNpId(s32 user_id) {
+        // Return by value: a reference into the map can dangle if a concurrent
+        // ConnectUser rehashes the table. A missing user yields a zeroed id.
+        std::lock_guard lock(m_mutex_clients);
+        auto it = m_np_ids.find(user_id);
+        return it != m_np_ids.end() ? it->second : OrbisNpId{};
     };
 
     std::string GetBearerToken(s32 user_id) const;
