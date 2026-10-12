@@ -852,6 +852,7 @@ s32 PS4_SYSV_ABI sceNpSignalingGetPeerNetInfoResult(OrbisNpSignalingContextId ct
 }
 
 s32 PS4_SYSV_ABI sceNpSignalingGetMemoryInfo(OrbisNpSignalingMemoryInfo* info) {
+    LOG_INFO(Lib_NpSignaling, "GetMemoryInfo: called (init={})", g_initialized);
     if (!g_initialized) {
         return ORBIS_NP_SIGNALING_ERROR_NOT_INITIALIZED;
     }
@@ -880,38 +881,40 @@ sceNpSignalingGetConnectionStatistics(OrbisNpSignalingConnectionStatistics* stat
 }
 
 // libSceNpSignaling is a lazily-loaded sysmodule. The plugin's own imports for
-// its exports resolve when the plugin loads - before that sysmodule exists -
-// so detouring through the import symbols lands on unresolved stubs and never
-// fires. Resolve each export at runtime with sceKernelDlsym (after loading
-// the sysmodule) and install the detours on the real function addresses.
+// Registration runs INSIDE the namespace, so every reference to a signaling
+// function here must be `::`-qualified: the bare name resolves to OUR
+// namespace implementation, and detouring that patches the plugin's own code
+// instead of the game-facing library. `::sceNpSignalingX` is the ORBIS import
+// (declared extern "C" in orbis/NpSignaling.h) - the loader resolves it to the
+// real libSceNpSignaling function, exactly like the working np_matching2 hooks.
 void RegisterLibraryHooks() {
-    // libSceNpSignaling is a lazily-loaded sysmodule, so the plugin's own
-    // imports for its exports may be unresolved at plugin load. Resolve the
-    // detour targets through, in order: the sysmodule handle, a fresh
-    // LoadStartModule handle, and the import slots themselves (only when they
-    // hold plausible addresses).
+    // Try the sysmodule handle first; when it is unavailable (0 = already
+    // loaded, no handle returned) fall back to the ORBIS import values, which
+    // is the mechanism the working hook registrations use.
     s32 handle = sceSysmoduleLoadModule(ORBIS_SYSMODULE_NP_SIGNALING);
     LOG_INFO(Lib_NpSignaling, "RegisterLibraryHooks: sceSysmoduleLoadModule -> {:#x}",
              static_cast<u32>(handle));
-    if (handle <= 0) {
-        s32 load_res = 0;
-        handle = sceKernelLoadStartModule("/system/common/lib/libSceNpSignaling.sprx", 0, nullptr,
-                                          0, nullptr, &load_res);
-        LOG_INFO(Lib_NpSignaling,
-                 "RegisterLibraryHooks: sceKernelLoadStartModule -> {:#x} (result {:#x})",
-                 static_cast<u32>(handle), static_cast<u32>(load_res));
-    }
     LOG_INFO(Lib_NpSignaling,
              "import sample: CreateContext={:#x} Initialize={:#x} GetConnectionStatus={:#x}",
-             reinterpret_cast<uint64_t>(sceNpSignalingCreateContext),
-             reinterpret_cast<uint64_t>(sceNpSignalingInitialize),
-             reinterpret_cast<uint64_t>(sceNpSignalingGetConnectionStatus));
+             reinterpret_cast<uint64_t>(::sceNpSignalingCreateContext),
+             reinterpret_cast<uint64_t>(::sceNpSignalingInitialize),
+             reinterpret_cast<uint64_t>(::sceNpSignalingGetConnectionStatus));
+    LOG_INFO(Lib_NpSignaling, "own impl reference (must differ): CreateContext={:#x}",
+             reinterpret_cast<uint64_t>(Libraries::Np::NpSignaling::sceNpSignalingCreateContext));
 
 #define SIGNALING_HOOK(name)                                                                       \
     do {                                                                                           \
         void* addr = nullptr;                                                                      \
         if (handle > 0) {                                                                          \
             sceKernelDlsym(handle, #name, &addr);                                                  \
+        }                                                                                          \
+        if (addr == nullptr) {                                                                     \
+            /* `::name` is the ORBIS import (the loader-resolved real function), exactly like      \
+               the working np_matching2 registrations; the bare name here would resolve to the     \
+               namespace implementation (our own code) and detour the wrong address. */            \
+            const u64 import_val = reinterpret_cast<u64>(::name);                                  \
+            if (import_val >= 0x800000000ULL && import_val < 0x1000000000ULL)                      \
+                addr = reinterpret_cast<void*>(import_val);                                        \
         }                                                                                          \
         if (addr != nullptr) {                                                                     \
             Detour_Construct(&Detour_##name, DetourMode_x64);                                      \
@@ -950,6 +953,16 @@ void RegisterLibraryHooks() {
     SIGNALING_HOOK(sceNpSignalingSetContextOption);
     SIGNALING_HOOK(sceNpSignalingTerminate);
     SIGNALING_HOOK(sceNpSignalingTerminateConnection);
+
+    // --- self-check: the detour targets must be the ORBIS imports (the real
+    // library functions), never our own namespace implementations.
+    {
+        const u64 import_sig = reinterpret_cast<u64>(::sceNpSignalingCreateContext);
+        const u64 own_sig =
+            reinterpret_cast<u64>(Libraries::Np::NpSignaling::sceNpSignalingCreateContext);
+        LOG_INFO(Lib_NpSignaling, "self-check: import={:#x} own={:#x} -> {}", import_sig, own_sig,
+                 (import_sig > 0x10000000ULL && import_sig != own_sig) ? "OK" : "SUSPECT");
+    }
 
 #undef SIGNALING_HOOK
 }
