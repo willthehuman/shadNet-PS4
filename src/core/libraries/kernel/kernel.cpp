@@ -3,6 +3,8 @@
 
 #include <cerrno>
 #include <cstdint>
+#include <netinet/in.h>
+#include <string>
 #include <sys/socket.h>
 
 #include "common/logging/log.h"
@@ -12,6 +14,22 @@
 // short junk pointers (e.g. 0x2) crash on strlen. (CE-34878-0 fix class.)
 static inline bool IsPlausibleString(const char* p) {
     return reinterpret_cast<std::uintptr_t>(p) >= 0x10000;
+}
+
+// Decode an AF_INET sockaddr into "a.b.c.d:port" for the socket-call trace.
+// Address and port travel in network byte order — read the bytes directly.
+static std::string DescribeSockaddr(const void* addr, u32 addrlen) {
+    if (addr == nullptr || addrlen < 16) {
+        return "<none>";
+    }
+    const auto* sa = reinterpret_cast<const sockaddr*>(addr);
+    if (sa->sa_family != 2) {
+        return fmt::format("family={}", sa->sa_family);
+    }
+    const auto* in4 = reinterpret_cast<const sockaddr_in*>(addr);
+    const auto* b = reinterpret_cast<const u8*>(&in4->sin_addr.s_addr);
+    const u16 port = static_cast<u16>((in4->sin_port >> 8) | (in4->sin_port << 8));
+    return fmt::format("{}.{}.{}.{}:{}", b[0], b[1], b[2], b[3], port);
 }
 
 HOOK_INIT(socket);
@@ -35,7 +53,8 @@ HOOK_INIT(bind);
 s32 bind_hook(s32 fd, const void* addr, u32 addrlen) {
     const s32 rc = SHADNET_HOOK_CONTINUE(bind, fd, reinterpret_cast<const sockaddr*>(addr),
                                          static_cast<socklen_t>(addrlen));
-    LOG_INFO(Lib_Kernel, "bind(fd={}, addrlen={}) -> {} [errno={}]", fd, addrlen, rc, errno);
+    LOG_INFO(Lib_Kernel, "bind(fd={}, addr={}) -> {} [errno={}]", fd,
+             DescribeSockaddr(addr, addrlen), rc, errno);
     return rc;
 }
 
@@ -43,7 +62,8 @@ HOOK_INIT(connect);
 s32 connect_hook(s32 fd, const void* addr, u32 addrlen) {
     const s32 rc = SHADNET_HOOK_CONTINUE(connect, fd, reinterpret_cast<const sockaddr*>(addr),
                                          static_cast<socklen_t>(addrlen));
-    LOG_INFO(Lib_Kernel, "connect(fd={}, addrlen={}) -> {} [errno={}]", fd, addrlen, rc, errno);
+    LOG_INFO(Lib_Kernel, "connect(fd={}, addr={}) -> {} [errno={}]", fd,
+             DescribeSockaddr(addr, addrlen), rc, errno);
     return rc;
 }
 
@@ -53,7 +73,8 @@ s64 sendto_hook(s32 fd, const void* buf, u64 len, s32 flags, const void* addr, u
                                          reinterpret_cast<const sockaddr*>(addr),
                                          static_cast<socklen_t>(addrlen));
     if (rc < 0) {
-        LOG_INFO(Lib_Kernel, "sendto(fd={}, len={}) -> {} [errno={}]", fd, len, rc, errno);
+        LOG_INFO(Lib_Kernel, "sendto(fd={}, addr={}, len={}) -> {} [errno={}]", fd,
+                 DescribeSockaddr(addr, addrlen), len, rc, errno);
     }
     return rc;
 }

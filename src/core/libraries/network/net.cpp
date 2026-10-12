@@ -45,10 +45,15 @@ s32 sceNetResolverStartNtoa_hook(s32 rid, const char* hostname, OrbisNetInAddr* 
                                  s32 retry, s32 flags) {
     if (!IsPlausibleString(hostname)) {
         // Never forward a junk pointer into the real resolver — it dereferences it.
+        // Raw hex dump of everything read off the ABI: identifies the true caller /
+        // argument layout when this fires (seen: ptr 0x2 from game code 0x800821d1e).
         LOG_WARNING(Lib_Net,
-                    "called, hostname = <bad ptr {:#x}>, rid={}, timeout={}, retry={}, flags={}, "
-                    "caller={:#x} -> returning EINVAL",
-                    reinterpret_cast<std::uintptr_t>(hostname), rid, timeout, retry, flags,
+                    "called with junk hostname; raw rid={:#x} hostname={:#x} addr={:#x} "
+                    "timeout={:#x} retry={:#x} flags={:#x} caller={:#x} -> returning EINVAL",
+                    static_cast<std::uint32_t>(rid),
+                    reinterpret_cast<std::uintptr_t>(hostname),
+                    reinterpret_cast<std::uintptr_t>(addr), static_cast<std::uint32_t>(timeout),
+                    static_cast<std::uint32_t>(retry), static_cast<std::uint32_t>(flags),
                     reinterpret_cast<std::uintptr_t>(__builtin_return_address(0)));
         return kSceNetErrorEINVAL;
     }
@@ -57,9 +62,31 @@ s32 sceNetResolverStartNtoa_hook(s32 rid, const char* hostname, OrbisNetInAddr* 
                                  flags);
 }
 
+HOOK_INIT(sceNetResolverCreate);
+OrbisNetId sceNetResolverCreate_hook(const char* name, s32 memid, s32 flags) {
+    const OrbisNetId rc = SHADNET_HOOK_CONTINUE(sceNetResolverCreate, name, memid, flags);
+    if (IsPlausibleString(name)) {
+        LOG_INFO(Lib_Net, "called, name = {}, memid = {}, flags = {:#x} -> rid {}", name, memid,
+                 flags, rc);
+    } else {
+        LOG_WARNING(Lib_Net, "called, name = <bad ptr {:#x}>, memid = {}, flags = {:#x} -> rid {}",
+                    reinterpret_cast<std::uintptr_t>(name), memid, flags, rc);
+    }
+    return rc;
+}
+
+HOOK_INIT(sceNetResolverDestroy);
+s32 sceNetResolverDestroy_hook(s32 rid) {
+    const s32 rc = SHADNET_HOOK_CONTINUE(sceNetResolverDestroy, rid);
+    LOG_INFO(Lib_Net, "called, rid = {} -> {}", rid, rc);
+    return rc;
+}
+
 void RegisterNetHooks() {
     HOOK(sceNetSocket);
     HOOK(sceNetResolverStartNtoa);
+    HOOK(sceNetResolverCreate);
+    HOOK(sceNetResolverDestroy);
 }
 
 namespace Libraries::Network::Net {
