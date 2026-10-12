@@ -187,6 +187,7 @@ set(PLUGIN_LIBS
     -lSceSysUtil
     -lSceUserService
     -lSceHttp
+    -lSceSsl
 )
 
 set(SHADNET_PROTO_OUT "${CMAKE_CURRENT_BINARY_DIR}/shadnet_proto_gen")
@@ -202,6 +203,7 @@ set(COMMON_SOURCES src/common/error.cpp
 set(CORE_SOURCES src/core/libraries/kernel/kernel.cpp
                  src/core/libraries/kernel/kernel_shim.cpp
                  src/core/libraries/network/net.cpp
+                 src/core/libraries/network/http_hooks.cpp
                  src/core/libraries/network/net_shim.cpp
                  src/core/libraries/network/net_util.cpp
                  src/core/libraries/network/netctl.cpp

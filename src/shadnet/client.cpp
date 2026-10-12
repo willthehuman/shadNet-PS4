@@ -736,7 +736,11 @@ void ShadNetClient::HandleServerFeaturesReply(const std::vector<u8>& payload) {
     m_matching2_enabled.store(matching2_enabled);
     m_server_features_received.store(parsed);
 
-    ReportClientVersion();
+    // v30: `SetClientVersion` (cmd 13) removed — neither the PC client nor any
+    // shadNet server (protocol.h: Login=0..GetServerFeatures=12, then scores
+    // at 30+) defines command 13; sending it produced "Unknown command 13" on
+    // the server and an unhandled error reply here. Version telemetry, if ever
+    // wanted, must land server-side first.
 
     LOG_INFO(shadNet, "Server features: matching2_enabled {}", matching2_enabled);
     sem_post(&m_sem_authenticated);
