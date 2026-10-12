@@ -20,14 +20,24 @@ static constexpr s32 kSceNetErrorEINVAL = 0x80410116;
 
 HOOK_INIT(sceNetSocket);
 s32 sceNetSocket_hook(const char* name, s32 family, s32 type, s32 protocol) {
-    if (IsPlausibleString(name)) {
-        LOG_INFO(Lib_Net, "called, name = {}, family = {}, type = {}, protocol = {}", name, family,
-                 type, protocol);
-    } else {
-        LOG_WARNING(Lib_Net, "called, name = <bad ptr {:#x}>, family = {}, type = {}, protocol = {}",
-                    reinterpret_cast<std::uintptr_t>(name), family, type, protocol);
+    // Bridge type-6 P2P datagram sockets to plain UDP at the library level too:
+    // libSceNet does P2P-specific setup on the fd that a bridged kernel socket
+    // cannot satisfy (the game retried creation 7x in the trace). Passing type 2
+    // straight through gives the game a consistent, working datagram socket.
+    s32 effective_type = type;
+    if (family == 2 && type == 6) {
+        effective_type = 2; // SOCK_DGRAM
     }
-    return SHADNET_HOOK_CONTINUE(sceNetSocket, name, family, type, protocol);
+    if (IsPlausibleString(name)) {
+        LOG_INFO(Lib_Net, "called, name = {}, family = {}, type = {}{}, protocol = {}", name, family,
+                 type, type != effective_type ? " -> bridged to DGRAM" : "", protocol);
+    } else {
+        LOG_WARNING(Lib_Net,
+                    "called, name = <bad ptr {:#x}>, family = {}, type = {}{}, protocol = {}",
+                    reinterpret_cast<std::uintptr_t>(name), family, type,
+                    type != effective_type ? " -> bridged to DGRAM" : "", protocol);
+    }
+    return SHADNET_HOOK_CONTINUE(sceNetSocket, name, family, effective_type, protocol);
 }
 
 HOOK_INIT(sceNetResolverStartNtoa);
