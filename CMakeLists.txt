@@ -206,6 +206,7 @@ set(CORE_SOURCES src/core/libraries/kernel/kernel.cpp
                  src/core/libraries/network/net_util.cpp
                  src/core/libraries/network/netctl.cpp
                  src/core/libraries/network/p2p_transport.cpp
+                 src/core/libraries/network/netctl_hooks.cpp
                  src/core/libraries/system/user_service.cpp
                  src/core/libraries/np/np_handler.cpp
                  src/core/libraries/np/np_common.cpp

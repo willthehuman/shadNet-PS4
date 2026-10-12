@@ -10,6 +10,7 @@
 #include "common/types.h"
 #include "core/libraries/kernel/kernel.h"
 #include "core/libraries/network/net.h"
+#include "core/libraries/network/netctl_hooks.h"
 #include "core/libraries/np/np_handler.h"
 #include "core/libraries/np/np_auth.h"
 #include "core/libraries/np/np_manager/np_manager.h"
@@ -75,6 +76,7 @@ extern "C" s32 client_start() {
 
     // Init other library hooks
     Libraries::Network::Net::RegisterHooks();
+    Libraries::Network::NetCtl::RegisterHooks();
     Libraries::Np::NpManager::RegisterHooks();
     Libraries::Np::NpAuth::RegisterHooks();
     Libraries::Np::NpScore::RegisterHooks();
