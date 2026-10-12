@@ -42,6 +42,7 @@ static void RunPluginStaticInitializers() {
         // Raw link-time values (if relocations were ever skipped) are rejected
         // instead of jumping into unmapped memory.
         if (value >= 0x10000000) {
+            LOG_INFO(shadNet, "  static init [{}/{}] @ 0x{:x}", i + 1, count, value);
             fn();
             ++ran;
         }

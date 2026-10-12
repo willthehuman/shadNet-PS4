@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <pthread.h>
 #include <string>
 #include <string_view>
 #include <absl/container/flat_hash_map.h>
@@ -21,7 +23,50 @@
 
 namespace Libraries::Np::NpWebApi {
 
-static std::recursive_mutex g_global_mutex;
+// std::recursive_mutex whose construction never calls the kernel: the plugin
+// runs its static initializers at load time (the GoldHEN loader skips
+// .init_array), and that early loader context cannot service pthread calls -
+// recursive_mutex's constructor (pthread_mutexattr_init/settype/init) faults
+// there, while plain std::mutex is a zero-fill and is fine. Create the pthread
+// objects lazily on first use; first use always happens on a regular game
+// thread, where these calls are known to work.
+class LazyRecursiveMutex {
+public:
+    void lock() {
+        if (state_.load(std::memory_order_acquire) != kReady) {
+            EnsureInit();
+        }
+        pthread_mutex_lock(&m_);
+    }
+    void unlock() {
+        pthread_mutex_unlock(&m_);
+    }
+
+private:
+    static constexpr int kUninit = 0;
+    static constexpr int kBusy = 1;
+    static constexpr int kReady = 2;
+
+    void EnsureInit() {
+        int expected = kUninit;
+        if (state_.compare_exchange_strong(expected, kBusy, std::memory_order_acq_rel)) {
+            pthread_mutexattr_t attr{};
+            pthread_mutexattr_init(&attr);
+            pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+            pthread_mutex_init(&m_, &attr);
+            pthread_mutexattr_destroy(&attr);
+            state_.store(kReady, std::memory_order_release);
+        } else {
+            while (state_.load(std::memory_order_acquire) != kReady) {
+            }
+        }
+    }
+
+    pthread_mutex_t m_{};
+    std::atomic<int> state_{kUninit};
+};
+
+static LazyRecursiveMutex g_global_mutex;
 static absl::flat_hash_map<s32, OrbisNpWebApiContext*> g_contexts;
 static s32 g_library_context_count = 0;
 
