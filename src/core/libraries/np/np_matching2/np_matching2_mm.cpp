@@ -16,6 +16,7 @@
 #include "core/libraries/np/np_matching2/np_matching2_internal.h"
 #include "core/libraries/np/np_matching2/np_matching2_mm.h"
 #include "core/libraries/np/np_signaling/np_signaling_stubs.h"
+#include "core/libraries/network/p2p_transport.h"
 #include "shadnet.pb.h"
 #include "shadnet/client.h"
 
@@ -668,24 +669,20 @@ void SetMmShadNetClient(std::shared_ptr<ShadNet::ShadNetClient> client,
         return;
     }
 
-    // Wire the signalling transport hooks (menu-stage wiring: the echo/ping
-    // paths must come up so the game's signalling context can initialize; the
-    // real peer data paths arrive with the P2P connection layer). Sends are
-    // reported accepted, receives look idle.
+    // Wire the signalling transport to the real UDP transport (one datagram
+    // socket): the STUN echo exchange with the shadNet server rides on this,
+    // and later the peer signalling traffic will too.
+    Libraries::Net::P2PSetServerAddr(server_addr, server_udp_port);
     {
         NpSignaling::Stubs::TransportHooks hooks{};
-        hooks.signaling_send = [](const void*, u32 len, u32, u16) -> int {
-            return static_cast<int>(len);
-        };
-        hooks.signaling_recv = [](void*, u32, u32*, u16*) -> int { return -1; };
-        hooks.control_send = [](const void*, u32 len, u32, u16) -> int {
-            return static_cast<int>(len);
-        };
-        hooks.control_recv = [](void*, u32, u32*, u16*) -> int { return -1; };
-        hooks.transport_ready = []() -> bool { return true; };
-        hooks.configured_port = []() -> u16 { return 0; };
-        hooks.advertised_addr = []() -> u32 { return 0; };
-        hooks.ensure_transport = []() -> bool { return true; };
+        hooks.signaling_send = Libraries::Net::P2PSignalingSendTo;
+        hooks.signaling_recv = Libraries::Net::P2PSignalingRecvFrom;
+        hooks.control_send = Libraries::Net::P2PControlSendTo;
+        hooks.control_recv = Libraries::Net::P2PControlRecvFrom;
+        hooks.transport_ready = Libraries::Net::P2PTransportIsReady;
+        hooks.configured_port = Libraries::Net::GetP2PConfiguredPort;
+        hooks.advertised_addr = Libraries::Net::GetP2PAdvertisedAddr;
+        hooks.ensure_transport = Libraries::Net::EnsureP2PTransport;
         NpSignaling::Stubs::SetTransportHooks(hooks);
     }
     NpSignaling::Stubs::SetPeerResolver(nullptr);
