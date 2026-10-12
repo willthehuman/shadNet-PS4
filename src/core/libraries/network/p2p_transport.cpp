@@ -3,25 +3,27 @@
 //
 // Minimal real UDP transport for the NP signalling layer. One datagram socket
 // carries the STUN echo exchange (client -> server :udp, server -> client
-// pong) that the game's network-status check depends on. Addresses and ports
-// keep the byte-order conventions already used across the NP port: u32
-// addresses are the raw sin_addr values, ports are network order where the
-// callers pass what they received.
+// pong) that the game's network-status check depends on. Everything goes
+// through the same POSIX socket surface the shadNet client already uses
+// (plain ::socket/::bind/::sendto/::recvfrom) - the raw SDK entry point
+// rejects datagram sockets in this runtime (SCE 0x80410116 / EINVAL).
+// Addresses are raw network-order sin_addr values and ports travel in the
+// same byte order the NP port's callers pass them in.
 
 #include "core/libraries/network/p2p_transport.h"
 
+#include <arpa/inet.h>
+#include <cerrno>
+#include <fcntl.h>
 #include <mutex>
-
-#include <orbis/Net.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 #include "common/logging/log.h"
 
-// PS4 sockopt constants (as defined by the toolchain's sys/socket.h).
-#ifndef SOL_SOCKET
-#define SOL_SOCKET 0xffff
-#endif
-#ifndef SO_NBIO
-#define SO_NBIO 0x1200
+#ifndef SOCK_DGRAM_P2P
+#define SOCK_DGRAM_P2P 6
 #endif
 
 namespace Libraries::Net {
@@ -29,11 +31,24 @@ namespace Libraries::Net {
 namespace {
 
 std::mutex g_mutex;
-OrbisNetId g_sock = -1;
+int g_sock = -1;
 u16 g_port_net = 0;   // bound port, network order
 u32 g_local_addr = 0; // LAN address, network order
 u32 g_server_addr = 0;
 u16 g_server_udp = 0; // server STUN port, network order
+
+int CreateDatagramSocket() {
+    int sock = ::socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        const int first_err = errno;
+        // Fall back to the P2P datagram type the signalling ioctl socket
+        // already uses on this platform.
+        sock = ::socket(AF_INET, SOCK_DGRAM_P2P, 0);
+        LOG_INFO(Lib_Net, "P2P transport: SOCK_DGRAM failed (errno={}), SOCK_DGRAM_P2P -> {}",
+                 first_err, sock);
+    }
+    return sock;
+}
 
 } // namespace
 
@@ -49,64 +64,59 @@ bool EnsureP2PTransport() {
         return true;
     }
 
-    OrbisNetId sock = sceNetSocket("shadNet-P2P", ORBIS_NET_AF_INET, ORBIS_NET_SOCK_DGRAM, 0);
+    int sock = CreateDatagramSocket();
     if (sock < 0) {
-        LOG_ERROR(Lib_Net, "P2P transport: socket() failed ({:#x})", static_cast<u32>(sock));
+        LOG_ERROR(Lib_Net, "P2P transport: socket() failed (errno={})", errno);
         return false;
     }
 
-    s32 nonblock = 1;
-    const s32 nb_rc = sceNetSetsockopt(sock, SOL_SOCKET, SO_NBIO, &nonblock, sizeof(nonblock));
-    if (nb_rc < 0) {
-        LOG_WARNING(Lib_Net, "P2P transport: SO_NBIO failed ({:#x})", static_cast<u32>(nb_rc));
+    const int flags = ::fcntl(sock, F_GETFL, 0);
+    if (flags >= 0) {
+        ::fcntl(sock, F_SETFL, flags | O_NONBLOCK);
     }
 
-    OrbisNetSockaddrIn bind_addr{};
-    bind_addr.sin_len = sizeof(bind_addr);
-    bind_addr.sin_family = ORBIS_NET_AF_INET;
+    sockaddr_in bind_addr{};
+    bind_addr.sin_family = AF_INET;
     bind_addr.sin_port = 0;
-    bind_addr.sin_addr = 0;
-    const s32 bind_rc =
-        sceNetBind(sock, reinterpret_cast<OrbisNetSockaddr*>(&bind_addr), sizeof(bind_addr));
-    if (bind_rc < 0) {
-        LOG_ERROR(Lib_Net, "P2P transport: bind() failed ({:#x})", static_cast<u32>(bind_rc));
-        sceNetSocketClose(sock);
+    bind_addr.sin_addr.s_addr = 0;
+    if (::bind(sock, reinterpret_cast<sockaddr*>(&bind_addr), sizeof(bind_addr)) < 0) {
+        LOG_ERROR(Lib_Net, "P2P transport: bind() failed (errno={})", errno);
+        ::close(sock);
         return false;
     }
 
-    OrbisNetSockaddrIn local{};
-    OrbisNetSocklen_t local_len = sizeof(local);
-    if (sceNetGetsockname(sock, reinterpret_cast<OrbisNetSockaddr*>(&local), &local_len) == 0) {
+    sockaddr_in local{};
+    socklen_t local_len = sizeof(local);
+    if (::getsockname(sock, reinterpret_cast<sockaddr*>(&local), &local_len) == 0) {
         g_port_net = local.sin_port;
     }
 
     // Advertised LAN address: ask the routing layer which local address it
     // would use to reach the shadNet server (datagram connect + getsockname).
     if (g_server_addr != 0) {
-        OrbisNetId probe =
-            sceNetSocket("shadNet-P2P-probe", ORBIS_NET_AF_INET, ORBIS_NET_SOCK_DGRAM, 0);
+        const int probe = ::socket(AF_INET, SOCK_DGRAM, 0);
         if (probe >= 0) {
-            OrbisNetSockaddrIn target{};
-            target.sin_len = sizeof(target);
-            target.sin_family = ORBIS_NET_AF_INET;
+            sockaddr_in target{};
+            target.sin_family = AF_INET;
             target.sin_port = g_server_udp;
-            target.sin_addr = g_server_addr;
-            if (sceNetConnect(probe, reinterpret_cast<OrbisNetSockaddr*>(&target), sizeof(target)) ==
-                0) {
-                OrbisNetSockaddrIn mine{};
-                OrbisNetSocklen_t mine_len = sizeof(mine);
-                if (sceNetGetsockname(probe, reinterpret_cast<OrbisNetSockaddr*>(&mine),
-                                      &mine_len) == 0) {
-                    g_local_addr = mine.sin_addr;
+            target.sin_addr.s_addr = g_server_addr;
+            if (::connect(probe, reinterpret_cast<sockaddr*>(&target), sizeof(target)) == 0) {
+                sockaddr_in mine{};
+                socklen_t mine_len = sizeof(mine);
+                if (::getsockname(probe, reinterpret_cast<sockaddr*>(&mine), &mine_len) == 0) {
+                    g_local_addr = mine.sin_addr.s_addr;
                 }
             }
-            sceNetSocketClose(probe);
+            ::close(probe);
         }
     }
 
     g_sock = sock;
-    LOG_INFO(Lib_Net, "P2P transport: ready, port={} local={:#x} server={:#x}:{}",
-             sceNetNtohs(g_port_net), g_local_addr, g_server_addr, sceNetNtohs(g_server_udp));
+    LOG_INFO(Lib_Net,
+             "P2P transport: ready, fd={} port={} local={}.{}.{}.{} server={:#x}:{}", sock,
+             ntohs(g_port_net), (g_local_addr >> 0) & 0xff, (g_local_addr >> 8) & 0xff,
+             (g_local_addr >> 16) & 0xff, (g_local_addr >> 24) & 0xff, g_server_addr,
+             ntohs(g_server_udp));
     return true;
 }
 
@@ -118,13 +128,12 @@ int P2PSignalingSendTo(const void* data, u32 len, u32 dest_addr, u16 dest_port) 
     if (!EnsureP2PTransport()) {
         return -1;
     }
-    OrbisNetSockaddrIn dst{};
-    dst.sin_len = sizeof(dst);
-    dst.sin_family = ORBIS_NET_AF_INET;
+    sockaddr_in dst{};
+    dst.sin_family = AF_INET;
     dst.sin_port = dest_port; // network order (callers pass wire values)
-    dst.sin_addr = dest_addr;
-    const s32 rc = sceNetSendto(g_sock, data, len, 0,
-                                reinterpret_cast<const OrbisNetSockaddr*>(&dst), sizeof(dst));
+    dst.sin_addr.s_addr = dest_addr;
+    const ssize_t rc =
+        ::sendto(g_sock, data, len, 0, reinterpret_cast<const sockaddr*>(&dst), sizeof(dst));
     return static_cast<int>(rc);
 }
 
@@ -132,13 +141,12 @@ int P2PSignalingRecvFrom(void* buf, u32 len, u32* from_addr, u16* from_port) {
     if (!EnsureP2PTransport()) {
         return -1;
     }
-    OrbisNetSockaddrIn src{};
-    OrbisNetSocklen_t src_len = sizeof(src);
-    const s32 rc = sceNetRecvfrom(g_sock, buf, len, 0,
-                                  reinterpret_cast<OrbisNetSockaddr*>(&src), &src_len);
+    sockaddr_in src{};
+    socklen_t src_len = sizeof(src);
+    const ssize_t rc = ::recvfrom(g_sock, buf, len, 0, reinterpret_cast<sockaddr*>(&src), &src_len);
     if (rc > 0) {
         if (from_addr != nullptr) {
-            *from_addr = src.sin_addr;
+            *from_addr = src.sin_addr.s_addr;
         }
         if (from_port != nullptr) {
             *from_port = src.sin_port;
@@ -158,7 +166,7 @@ int P2PControlRecvFrom(void* /*buf*/, u32 /*len*/, u32* /*from_addr*/, u16* /*fr
 }
 
 u16 GetP2PConfiguredPort() {
-    return sceNetNtohs(g_port_net); // host order (matches the PC build's surface)
+    return ntohs(g_port_net); // host order (matches the PC build's surface)
 }
 
 u32 GetP2PAdvertisedAddr() {
