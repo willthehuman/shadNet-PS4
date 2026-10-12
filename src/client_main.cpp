@@ -11,6 +11,7 @@
 #include "core/libraries/kernel/kernel.h"
 #include "core/libraries/network/net.h"
 #include "core/libraries/np/np_handler.h"
+#include "core/libraries/np/np_auth.h"
 #include "core/libraries/np/np_manager/np_manager.h"
 #include "core/libraries/np/np_matching2/np_matching2.h"
 #include "core/libraries/np/np_score.h"
@@ -41,6 +42,7 @@ extern "C" s32 client_start() {
     // Init other library hooks
     Libraries::Network::Net::RegisterHooks();
     Libraries::Np::NpManager::RegisterHooks();
+    Libraries::Np::NpAuth::RegisterHooks();
     Libraries::Np::NpScore::RegisterHooks();
     Libraries::Np::NpWebApi::RegisterHooks();
     Libraries::Np::NpMatching2::RegisterHooks();

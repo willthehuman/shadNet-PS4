@@ -35,6 +35,16 @@ public:
         return it != m_clients.end() && it->second != nullptr && it->second->IsAuthenticated();
     };
 
+    bool HasAnySignedInUser() {
+        std::lock_guard lock(m_mutex_clients);
+        for (const auto& entry : m_clients) {
+            if (entry.second != nullptr && entry.second->IsAuthenticated()) {
+                return true;
+            }
+        }
+        return false;
+    };
+
     OrbisNpId GetNpId(s32 user_id) {
         // Return by value: a reference into the map can dangle if a concurrent
         // ConnectUser rehashes the table. A missing user yields a zeroed id.
