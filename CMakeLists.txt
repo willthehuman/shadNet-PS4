@@ -207,6 +207,8 @@ set(CORE_SOURCES src/core/libraries/kernel/kernel.cpp
                  src/core/libraries/np/np_web_api/np_web_api.cpp
                  src/core/libraries/np/np_web_api/np_web_api_internal.cpp
                  src/core/libraries/np/np_matching2/np_matching2.cpp
+                 src/core/libraries/np/np_matching2/np_matching2_internal.cpp
+                 src/core/libraries/np/np_matching2/np_matching2_mm.cpp
 )
 
 set(SHADNET_SOURCES src/shadnet/client.cpp

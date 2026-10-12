@@ -5,6 +5,7 @@
 #include <orbis/UserService.h>
 #include "common/logging/log.h"
 #include "core/libraries/np/np_handler.h"
+#include "core/libraries/np/np_matching2/np_matching2_mm.h"
 #include "core/libraries/np/np_web_api/np_web_api.h"
 #include "shadnet/client.h"
 #include "shadnet/config.h"
@@ -126,12 +127,10 @@ bool NpHandler::ConnectUser(s32 user_id, const std::string& host, u16 port, cons
     client->onWebApiPushEvent = [this, user_id](const ShadNet::NotifyWebApiPushEvent& n) {
         OnWebApiPushEvent(user_id, n);
     };
-    /*
-    client->onAsyncReply = [this, user_id](ShadNet::CommandType cmd, u64 pkt_id,
-                                           ShadNet::ErrorType err, const std::vector<u8>& body) {
+    client->onAsyncReply = [this, user_id](ShadNet::CommandType cmd, u64 pkt_id, ShadNet::ErrorType err,
+                                           const std::vector<u8>& body) {
         OnAsyncReply(user_id, cmd, pkt_id, err, body);
     };
-    */
 
     // Set whether the user should appear as offline or online during this session.
     client->SetAppearOffline(config.IsAppearOfflineEnabled(user_id));
@@ -179,11 +178,11 @@ bool NpHandler::ConnectUser(s32 user_id, const std::string& host, u16 port, cons
     //     Net::UPnPClient::Instance().Start();
     // }
 
-    // NpMatching2::SetMmShadNetClient(client, host, port);
+    NpMatching2::SetMmShadNetClient(client, host, port);
 
     // Build OrbisNpId
     {
-        OrbisNpId np_id{};
+        ::OrbisNpId np_id{};
         const u64 id_len = std::min<u64>(npid.length(), 16);
         std::lock_guard lock(m_mutex_clients);
         if (id_len > 0) {
@@ -464,22 +463,15 @@ void NpHandler::OnWebApiPushEvent(s32 user_id, const ShadNet::NotifyWebApiPushEv
     }
 }
 
-/*
 void NpHandler::OnAsyncReply(s32 user_id, ShadNet::CommandType cmd, u64 pkt_id,
                              ShadNet::ErrorType error, const std::vector<u8>& body) {
     const auto cmd_val = static_cast<u16>(cmd);
     if (cmd_val >= 100 && cmd_val <= 200) {
         NpMatching2::OnMatchingReply(cmd, pkt_id, error, body);
-    } else if (cmd_val >= 201 && cmd_val <= 300) {
-        OnTusReply(user_id, cmd, pkt_id, error, body);
-    } else if (cmd_val >= 301 && cmd_val <= 400) {
-        OnTrophyReply(user_id, cmd, pkt_id, error, body);
-    } else if (cmd == ShadNet::CommandType::LookupOnlineId) {
-        OnLookupReply(user_id, cmd, pkt_id, error, body);
     } else {
-        OnScoreReply(user_id, cmd, pkt_id, error, body);
+        LOG_WARNING(NpHandler, "unhandled async reply cmd={} pkt_id={} user={}", cmd_val, pkt_id,
+                    user_id);
     }
 }
-*/
 
 } // namespace Libraries::Np

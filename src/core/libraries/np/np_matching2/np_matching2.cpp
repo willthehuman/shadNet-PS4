@@ -11,6 +11,11 @@
 
 #include "common/logging/log.h"
 #include "common/plugin_common.h"
+#include "core/libraries/np/np_error.h"
+#include <cstring>
+#include "core/libraries/np/np_handler.h"
+#include "core/libraries/np/np_matching2/np_matching2_internal.h"
+#include "core/libraries/np/np_matching2/np_matching2_mm.h"
 
 extern "C" {
 int sceNpMatching2CreateContext(const Libraries::Np::NpMatching2::OrbisNpMatching2CreateContextParameter* param, Libraries::Np::NpMatching2::OrbisNpMatching2ContextId* ctxId);
@@ -134,136 +139,489 @@ SHADNET_HOOK_DECLARE(Libraries::Np::NpMatching2, sceNpMatching2SignalingGetPeerN
 
 namespace Libraries::Np::NpMatching2 {
 
-int sceNpMatching2CreateContext(const OrbisNpMatching2CreateContextParameter* param, OrbisNpMatching2ContextId* ctxId) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2CreateContext, param, ctxId);
-    LOG_INFO(Lib_NpMatching2, "param={}; ctxId={}; ret={:#x}", fmt::ptr((const void*)(param)), fmt::ptr((const void*)(ctxId)), (unsigned)(ret));
-    return ret;
+int sceNpMatching2CreateContext(const OrbisNpMatching2CreateContextParameter* param,
+                                 OrbisNpMatching2ContextId* ctxId) {
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    if (!param || param->size != 0x28 || !ctxId || !param->npId) {
+        LOG_ERROR(Lib_NpMatching2, "param null, invalid size, ctxId null, or npId null");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_ARGUMENT;
+    }
+
+    LOG_INFO(Lib_NpMatching2, "called, serviceLabel = {}, size = {:#x}", param->serviceLabel,
+             param->size);
+    return ContextManager::Instance().CreateContext(param->npId, param->serviceLabel, ctxId);
 }
 
-int sceNpMatching2CreateContextA(const OrbisNpMatching2CreateContextParameterA* param, OrbisNpMatching2ContextId* ctxId) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2CreateContextA, param, ctxId);
-    LOG_INFO(Lib_NpMatching2, "param={}; ctxId={}; ret={:#x}", fmt::ptr((const void*)(param)), fmt::ptr((const void*)(ctxId)), (unsigned)(ret));
-    return ret;
+int sceNpMatching2CreateContextA(const OrbisNpMatching2CreateContextParameterA* param,
+                                  OrbisNpMatching2ContextId* ctxId) {
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    if (!param || param->size != 0x10 || !ctxId) {
+        LOG_ERROR(Lib_NpMatching2, "param null, invalid size, or ctxId null");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_ARGUMENT;
+    }
+
+    LOG_INFO(Lib_NpMatching2, "called, userId = {}, serviceLabel = {}, size = {:#x}", param->userId,
+             param->serviceLabel, param->size);
+
+    // Bridge between the SDK's OrbisNpId and the ported Libraries::Np::OrbisNpId
+    // (identical layout; distinct C++ types — `auto` keeps this include-order safe).
+    const auto src =
+        Libraries::Np::NpHandler::Instance().GetNpId(static_cast<s32>(param->userId));
+    Libraries::Np::OrbisNpId np_id{};
+    std::memcpy(&np_id, &src, sizeof(np_id));
+    return ContextManager::Instance().CreateContext(&np_id, param->serviceLabel, ctxId, true);
 }
 
 int sceNpMatching2CreateJoinRoom(OrbisNpMatching2ContextId ctxId, OrbisNpMatching2CreateJoinRoomRequest* request, OrbisNpMatching2RequestOptParam* requestOpt, OrbisNpMatching2RequestId* requestId) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2CreateJoinRoom, ctxId, request, requestOpt, requestId);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; request={}; requestOpt={}; requestId={}; ret={:#x}", (unsigned long long)(ctxId), fmt::ptr((const void*)(request)), fmt::ptr((const void*)(requestOpt)), fmt::ptr((const void*)(requestId)), (unsigned)(ret));
-    return ret;
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, requestOpt = {}", ctxId, fmt::ptr(requestOpt));
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    if (!request || !requestId) {
+        LOG_ERROR(Lib_NpMatching2, "request or requestId null");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_ARGUMENT;
+    }
+
+    ContextObject* ctx = ContextManager::Instance().Get(ctxId);
+    if (!ctx) {
+        LOG_ERROR(Lib_NpMatching2, "invalid context id");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_CONTEXT_ID;
+    }
+
+    StoreRequestCallback(ctx, requestOpt);
+    const OrbisNpMatching2RequestId reqId = AllocRequestId();
+    *requestId = reqId;
+    MmCreateJoinRoom(ctxId, reqId, *request);
+    return ORBIS_OK;
 }
 
 int sceNpMatching2JoinRoom(OrbisNpMatching2ContextId ctxId, OrbisNpMatching2JoinRoomRequest* request, OrbisNpMatching2RequestOptParam* requestOpt, OrbisNpMatching2RequestId* requestId) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2JoinRoom, ctxId, request, requestOpt, requestId);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; request={}; requestOpt={}; requestId={}; ret={:#x}", (unsigned long long)(ctxId), fmt::ptr((const void*)(request)), fmt::ptr((const void*)(requestOpt)), fmt::ptr((const void*)(requestId)), (unsigned)(ret));
-    return ret;
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, requestOpt = {}", ctxId, fmt::ptr(requestOpt));
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    if (!request || !requestId) {
+        LOG_ERROR(Lib_NpMatching2, "request or requestId null");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_ARGUMENT;
+    }
+
+    ContextObject* ctx = ContextManager::Instance().Get(ctxId);
+    if (!ctx) {
+        LOG_ERROR(Lib_NpMatching2, "invalid context id");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_CONTEXT_ID;
+    }
+
+    StoreRequestCallback(ctx, requestOpt);
+    const OrbisNpMatching2RequestId reqId = AllocRequestId();
+    *requestId = reqId;
+    MmJoinRoom(ctxId, reqId, *request);
+    return ORBIS_OK;
 }
 
 int sceNpMatching2CreateJoinRoomA(OrbisNpMatching2ContextId ctxId, OrbisNpMatching2CreateJoinRoomRequestA* request, OrbisNpMatching2RequestOptParam* requestOpt, OrbisNpMatching2RequestId* requestId) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2CreateJoinRoomA, ctxId, request, requestOpt, requestId);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; request={}; requestOpt={}; requestId={}; ret={:#x}", (unsigned long long)(ctxId), fmt::ptr((const void*)(request)), fmt::ptr((const void*)(requestOpt)), fmt::ptr((const void*)(requestId)), (unsigned)(ret));
-    return ret;
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, requestOpt = {}", ctxId, fmt::ptr(requestOpt));
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    if (!request || !requestId) {
+        LOG_ERROR(Lib_NpMatching2, "request or requestId null");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_ARGUMENT;
+    }
+
+    ContextObject* ctx = ContextManager::Instance().Get(ctxId);
+    if (!ctx) {
+        LOG_ERROR(Lib_NpMatching2, "invalid context id");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_CONTEXT_ID;
+    }
+
+    StoreRequestCallback(ctx, requestOpt);
+    const OrbisNpMatching2RequestId reqId = AllocRequestId();
+    *requestId = reqId;
+    MmCreateJoinRoomA(ctxId, reqId, *request);
+    return ORBIS_OK;
 }
 
-int sceNpMatching2RegisterContextCallback(OrbisNpMatching2ContextCallback callback, void* userdata) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2RegisterContextCallback, callback, userdata);
-    LOG_INFO(Lib_NpMatching2, "callback={}; userdata={}; ret={:#x}", (unsigned long long)(callback), fmt::ptr((const void*)(userdata)), (unsigned)(ret));
-    return ret;
+int sceNpMatching2RegisterContextCallback(OrbisNpMatching2ContextCallback callback,
+                                           void* userdata) {
+    LOG_INFO(Lib_NpMatching2, "called, callback = {}, userdata = {}", fmt::ptr((const void*)callback),
+             userdata);
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+
+    ContextManager::Instance().ApplyContextCallback(callback, userdata);
+    return ORBIS_OK;
 }
 
-int sceNpMatching2RegisterLobbyEventCallback(OrbisNpMatching2ContextId ctxId, OrbisNpMatching2LobbyEventCallback callback, void* userdata) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2RegisterLobbyEventCallback, ctxId, callback, userdata);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; callback={}; userdata={}; ret={:#x}", (unsigned long long)(ctxId), (unsigned long long)(callback), fmt::ptr((const void*)(userdata)), (unsigned)(ret));
-    return ret;
+int sceNpMatching2RegisterLobbyEventCallback(OrbisNpMatching2ContextId ctxId,
+                                             OrbisNpMatching2LobbyEventCallback callback,
+                                             void* userdata) {
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, userdata = {}", ctxId, userdata);
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    ContextObject* ctx = ContextManager::Instance().Get(ctxId);
+    if (!ctx) {
+        LOG_ERROR(Lib_NpMatching2, "invalid context id");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_CONTEXT_ID;
+    }
+
+    ctx->lobby_event_callback = callback;
+    ctx->lobby_event_callback_arg = userdata;
+    return ORBIS_OK;
 }
 
-int sceNpMatching2RegisterRoomEventCallback(OrbisNpMatching2ContextId ctxId, OrbisNpMatching2RoomEventCallback callback, void* userdata) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2RegisterRoomEventCallback, ctxId, callback, userdata);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; callback={}; userdata={}; ret={:#x}", (unsigned long long)(ctxId), (unsigned long long)(callback), fmt::ptr((const void*)(userdata)), (unsigned)(ret));
-    return ret;
+int sceNpMatching2RegisterRoomEventCallback(OrbisNpMatching2ContextId ctxId,
+                                            OrbisNpMatching2RoomEventCallback callback,
+                                            void* userdata) {
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, userdata = {}", ctxId, userdata);
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    ContextObject* ctx = ContextManager::Instance().Get(ctxId);
+    if (!ctx) {
+        LOG_ERROR(Lib_NpMatching2, "invalid context id");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_CONTEXT_ID;
+    }
+
+    ctx->room_event_callback = callback;
+    ctx->room_event_callback_arg = userdata;
+    return ORBIS_OK;
 }
 
-int sceNpMatching2RegisterSignalingCallback(OrbisNpMatching2ContextId ctxId, OrbisNpMatching2SignalingCallback callback, void* userdata) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2RegisterSignalingCallback, ctxId, callback, userdata);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; callback={}; userdata={}; ret={:#x}", (unsigned long long)(ctxId), (unsigned long long)(callback), fmt::ptr((const void*)(userdata)), (unsigned)(ret));
-    return ret;
+int sceNpMatching2RegisterSignalingCallback(OrbisNpMatching2ContextId ctxId,
+                                            OrbisNpMatching2SignalingCallback callback,
+                                            void* userdata) {
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, userdata = {}", ctxId, userdata);
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    ContextObject* ctx = ContextManager::Instance().Get(ctxId);
+    if (!ctx) {
+        LOG_ERROR(Lib_NpMatching2, "invalid context id");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_CONTEXT_ID;
+    }
+
+    ctx->signaling_callback = callback;
+    ctx->signaling_callback_arg = userdata;
+    return ORBIS_OK;
 }
 
 int sceNpMatching2ContextStart(OrbisNpMatching2ContextId ctxId, u64 timeout) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2ContextStart, ctxId, timeout);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; timeout={}; ret={:#x}", (unsigned long long)(ctxId), (unsigned long long)(timeout), (unsigned)(ret));
-    return ret;
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, timeout = {}", ctxId, timeout);
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    if (!IsMmClientRunning()) {
+        // matches real-console behavior when not connected to the network
+        constexpr int ORBIS_NET_ERROR_RESOLVER_ETIMEDOUT = 0x804101e2;
+        LOG_ERROR(Lib_NpMatching2, "not connected to network");
+        return ORBIS_NET_ERROR_RESOLVER_ETIMEDOUT;
+    }
+
+    const s32 rc = ContextManager::Instance().Start(ctxId);
+    if (rc != ORBIS_OK) {
+        return rc;
+    }
+
+    MmContextStart(ctxId);
+    return ORBIS_OK;
 }
 
 int sceNpMatching2ContextStop(OrbisNpMatching2ContextId ctxId) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2ContextStop, ctxId);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; ret={:#x}", (unsigned long long)(ctxId), (unsigned)(ret));
-    return ret;
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}", ctxId);
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+
+    const s32 rc = ContextManager::Instance().Stop(ctxId);
+    if (rc != ORBIS_OK) {
+        return rc;
+    }
+
+    const s32 submit_rc = MmContextStop(ctxId);
+    if (submit_rc != ORBIS_OK) {
+        ContextManager::Instance().CompleteStop(ctxId);
+        return submit_rc;
+    }
+    return ORBIS_OK;
 }
 
 int sceNpMatching2Initialize(OrbisNpMatching2InitializeParameter* param) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2Initialize, param);
-    LOG_INFO(Lib_NpMatching2, "param={}; ret={:#x}", fmt::ptr((const void*)(param)), (unsigned)(ret));
-    return ret;
+    LOG_INFO(Lib_NpMatching2, "called");
+
+    if (IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "already initialized");
+        return ORBIS_NP_MATCHING2_ERROR_ALREADY_INITIALIZED;
+    }
+    if (!param || (param->size != 0x30 && param->size != 0x28)) {
+        LOG_ERROR(Lib_NpMatching2, "param null or invalid size");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_ARGUMENT;
+    }
+
+    LOG_INFO(Lib_NpMatching2, "poolSize={:#x} stackSize={:#x} priority={} size={:#x}",
+             param->poolSize, param->stackSize, param->priority, param->size);
+
+    InitEventDispatcher();
+    SetInitialized(true);
+    g_state.initialized.store(true);
+    return ORBIS_OK;
 }
 
 int sceNpMatching2Terminate() {
-    const int ret = HookContinueWrapperImpl<sceNpMatching2Terminate>::wrap(Detour_sceNpMatching2Terminate);
-    LOG_INFO(Lib_NpMatching2, "ret={:#x}", (unsigned)(ret));
-    return ret;
+    LOG_INFO(Lib_NpMatching2, "called");
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+
+    SetInitialized(false);
+    g_state.initialized.store(false);
+    TermEventDispatcher();
+    ContextManager::Instance().Reset();
+    return ORBIS_OK;
 }
 
-int sceNpMatching2SetDefaultRequestOptParam(OrbisNpMatching2ContextId ctxId, OrbisNpMatching2RequestOptParam* requestOpt) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2SetDefaultRequestOptParam, ctxId, requestOpt);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; requestOpt={}; ret={:#x}", (unsigned long long)(ctxId), fmt::ptr((const void*)(requestOpt)), (unsigned)(ret));
-    return ret;
+int sceNpMatching2SetDefaultRequestOptParam(OrbisNpMatching2ContextId ctxId,
+                                             OrbisNpMatching2RequestOptParam* requestOpt) {
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}", ctxId);
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    if (!requestOpt) {
+        LOG_ERROR(Lib_NpMatching2, "requestOpt null");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_ARGUMENT;
+    }
+    ContextObject* ctx = ContextManager::Instance().Get(ctxId);
+    if (!ctx) {
+        LOG_ERROR(Lib_NpMatching2, "invalid context id");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_CONTEXT_ID;
+    }
+
+    ctx->default_request_callback = requestOpt->callback;
+    ctx->default_request_callback_arg = requestOpt->arg;
+    return ORBIS_OK;
 }
 
-int sceNpMatching2GetServerId(OrbisNpMatching2ContextId ctxId, OrbisNpMatching2ServerId* serverId) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2GetServerId, ctxId, serverId);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; serverId={}; ret={:#x}", (unsigned long long)(ctxId), fmt::ptr((const void*)(serverId)), (unsigned)(ret));
-    return ret;
+int sceNpMatching2GetServerId(OrbisNpMatching2ContextId ctxId,
+                               OrbisNpMatching2ServerId* serverId) {
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}", ctxId);
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    if (!serverId) {
+        LOG_ERROR(Lib_NpMatching2, "serverId null");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_ARGUMENT;
+    }
+
+    *serverId = 1;
+    return ORBIS_OK;
 }
 
 int sceNpMatching2GetWorldInfoList(OrbisNpMatching2ContextId ctxId, OrbisNpMatching2GetWorldInfoListRequest* request, OrbisNpMatching2RequestOptParam* requestOpt, OrbisNpMatching2RequestId* requestId) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2GetWorldInfoList, ctxId, request, requestOpt, requestId);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; request={}; requestOpt={}; requestId={}; ret={:#x}", (unsigned long long)(ctxId), fmt::ptr((const void*)(request)), fmt::ptr((const void*)(requestOpt)), fmt::ptr((const void*)(requestId)), (unsigned)(ret));
-    return ret;
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, requestOpt = {}", ctxId, fmt::ptr(requestOpt));
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    if (!request || !requestId) {
+        LOG_ERROR(Lib_NpMatching2, "request or requestId null");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_ARGUMENT;
+    }
+
+    ContextObject* ctx = ContextManager::Instance().Get(ctxId);
+    if (!ctx) {
+        LOG_ERROR(Lib_NpMatching2, "invalid context id");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_CONTEXT_ID;
+    }
+
+    StoreRequestCallback(ctx, requestOpt);
+    const OrbisNpMatching2RequestId reqId = AllocRequestId();
+    *requestId = reqId;
+    MmGetWorldInfoList(ctxId, reqId, *request);
+    return ORBIS_OK;
 }
 
 int sceNpMatching2LeaveRoom(OrbisNpMatching2ContextId ctxId, OrbisNpMatching2LeaveRoomRequest* request, OrbisNpMatching2RequestOptParam* requestOpt, OrbisNpMatching2RequestId* requestId) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2LeaveRoom, ctxId, request, requestOpt, requestId);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; request={}; requestOpt={}; requestId={}; ret={:#x}", (unsigned long long)(ctxId), fmt::ptr((const void*)(request)), fmt::ptr((const void*)(requestOpt)), fmt::ptr((const void*)(requestId)), (unsigned)(ret));
-    return ret;
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, requestOpt = {}", ctxId, fmt::ptr(requestOpt));
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    if (!request || !requestId) {
+        LOG_ERROR(Lib_NpMatching2, "request or requestId null");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_ARGUMENT;
+    }
+
+    ContextObject* ctx = ContextManager::Instance().Get(ctxId);
+    if (!ctx) {
+        LOG_ERROR(Lib_NpMatching2, "invalid context id");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_CONTEXT_ID;
+    }
+
+    StoreRequestCallback(ctx, requestOpt);
+    const OrbisNpMatching2RequestId reqId = AllocRequestId();
+    *requestId = reqId;
+    MmLeaveRoom(ctxId, reqId, *request);
+    return ORBIS_OK;
 }
 
 int sceNpMatching2SearchRoom(OrbisNpMatching2ContextId ctxId, OrbisNpMatching2SearchRoomRequest* request, OrbisNpMatching2RequestOptParam* requestOpt, OrbisNpMatching2RequestId* requestId) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2SearchRoom, ctxId, request, requestOpt, requestId);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; request={}; requestOpt={}; requestId={}; ret={:#x}", (unsigned long long)(ctxId), fmt::ptr((const void*)(request)), fmt::ptr((const void*)(requestOpt)), fmt::ptr((const void*)(requestId)), (unsigned)(ret));
-    return ret;
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, requestOpt = {}", ctxId, fmt::ptr(requestOpt));
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    if (!request || !requestId) {
+        LOG_ERROR(Lib_NpMatching2, "request or requestId null");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_ARGUMENT;
+    }
+
+    ContextObject* ctx = ContextManager::Instance().Get(ctxId);
+    if (!ctx) {
+        LOG_ERROR(Lib_NpMatching2, "invalid context id");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_CONTEXT_ID;
+    }
+
+    StoreRequestCallback(ctx, requestOpt);
+    const OrbisNpMatching2RequestId reqId = AllocRequestId();
+    *requestId = reqId;
+    MmSearchRoom(ctxId, reqId, *request, ctx->a_variant);
+    return ORBIS_OK;
 }
 
 int sceNpMatching2SetUserInfo(OrbisNpMatching2ContextId ctxId, OrbisNpMatching2SetUserInfoRequest* request, OrbisNpMatching2RequestOptParam* requestOpt, OrbisNpMatching2RequestId* requestId) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2SetUserInfo, ctxId, request, requestOpt, requestId);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; request={}; requestOpt={}; requestId={}; ret={:#x}", (unsigned long long)(ctxId), fmt::ptr((const void*)(request)), fmt::ptr((const void*)(requestOpt)), fmt::ptr((const void*)(requestId)), (unsigned)(ret));
-    return ret;
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, requestOpt = {}", ctxId, fmt::ptr(requestOpt));
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    if (!request || !requestId) {
+        LOG_ERROR(Lib_NpMatching2, "request or requestId null");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_ARGUMENT;
+    }
+
+    ContextObject* ctx = ContextManager::Instance().Get(ctxId);
+    if (!ctx) {
+        LOG_ERROR(Lib_NpMatching2, "invalid context id");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_CONTEXT_ID;
+    }
+
+    StoreRequestCallback(ctx, requestOpt);
+    const OrbisNpMatching2RequestId reqId = AllocRequestId();
+    *requestId = reqId;
+    MmSetUserInfo(ctxId, reqId, *request);
+    return ORBIS_OK;
 }
 
-int sceNpMatching2SendRoomMessage(OrbisNpMatching2ContextId ctxId, void* request, OrbisNpMatching2RequestOptParam* requestOpt, OrbisNpMatching2RequestId* requestId) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2SendRoomMessage, ctxId, request, requestOpt, requestId);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; request={}; requestOpt={}; requestId={}; ret={:#x}", (unsigned long long)(ctxId), fmt::ptr((const void*)(request)), fmt::ptr((const void*)(requestOpt)), fmt::ptr((const void*)(requestId)), (unsigned)(ret));
-    return ret;
+int sceNpMatching2SendRoomMessage(OrbisNpMatching2ContextId ctxId, void* request,
+                                   OrbisNpMatching2RequestOptParam* requestOpt,
+                                   OrbisNpMatching2RequestId* requestId) {
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, requestOpt = {}", ctxId, fmt::ptr(requestOpt));
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    if (!request || !requestId) {
+        LOG_ERROR(Lib_NpMatching2, "request or requestId null");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_ARGUMENT;
+    }
+
+    ContextObject* ctx = ContextManager::Instance().Get(ctxId);
+    if (!ctx) {
+        LOG_ERROR(Lib_NpMatching2, "invalid context id");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_CONTEXT_ID;
+    }
+
+    StoreRequestCallback(ctx, requestOpt);
+    const OrbisNpMatching2RequestId reqId = AllocRequestId();
+    *requestId = reqId;
+    return MmSendRoomMessage(ctxId, reqId,
+                             *static_cast<OrbisNpMatching2SendRoomMessageRequest*>(request));
 }
 
 int sceNpMatching2SetRoomDataExternal(OrbisNpMatching2ContextId ctxId, OrbisNpMatching2SetRoomDataExternalRequest* request, OrbisNpMatching2RequestOptParam* requestOpt, OrbisNpMatching2RequestId* requestId) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2SetRoomDataExternal, ctxId, request, requestOpt, requestId);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; request={}; requestOpt={}; requestId={}; ret={:#x}", (unsigned long long)(ctxId), fmt::ptr((const void*)(request)), fmt::ptr((const void*)(requestOpt)), fmt::ptr((const void*)(requestId)), (unsigned)(ret));
-    return ret;
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, requestOpt = {}", ctxId, fmt::ptr(requestOpt));
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    if (!request || !requestId) {
+        LOG_ERROR(Lib_NpMatching2, "request or requestId null");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_ARGUMENT;
+    }
+
+    ContextObject* ctx = ContextManager::Instance().Get(ctxId);
+    if (!ctx) {
+        LOG_ERROR(Lib_NpMatching2, "invalid context id");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_CONTEXT_ID;
+    }
+
+    StoreRequestCallback(ctx, requestOpt);
+    const OrbisNpMatching2RequestId reqId = AllocRequestId();
+    *requestId = reqId;
+    MmSetRoomDataExternal(ctxId, reqId, *request);
+    return ORBIS_OK;
 }
 
 int sceNpMatching2SetRoomDataInternal(OrbisNpMatching2ContextId ctxId, OrbisNpMatching2SetRoomDataInternalRequest* request, OrbisNpMatching2RequestOptParam* requestOpt, OrbisNpMatching2RequestId* requestId) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2SetRoomDataInternal, ctxId, request, requestOpt, requestId);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; request={}; requestOpt={}; requestId={}; ret={:#x}", (unsigned long long)(ctxId), fmt::ptr((const void*)(request)), fmt::ptr((const void*)(requestOpt)), fmt::ptr((const void*)(requestId)), (unsigned)(ret));
-    return ret;
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, requestOpt = {}", ctxId, fmt::ptr(requestOpt));
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    if (!request || !requestId) {
+        LOG_ERROR(Lib_NpMatching2, "request or requestId null");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_ARGUMENT;
+    }
+
+    ContextObject* ctx = ContextManager::Instance().Get(ctxId);
+    if (!ctx) {
+        LOG_ERROR(Lib_NpMatching2, "invalid context id");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_CONTEXT_ID;
+    }
+
+    StoreRequestCallback(ctx, requestOpt);
+    const OrbisNpMatching2RequestId reqId = AllocRequestId();
+    *requestId = reqId;
+    MmSetRoomDataInternal(ctxId, reqId, *request);
+    return ORBIS_OK;
 }
 
 s32 sceNpMatching2SignalingGetConnectionStatus(OrbisNpMatching2ContextId ctxId, OrbisNpMatching2RoomId roomId, OrbisNpMatching2RoomMemberId memberId, s32* connStatus, void* peerAddr, u16* peerPort) {
@@ -273,27 +631,62 @@ s32 sceNpMatching2SignalingGetConnectionStatus(OrbisNpMatching2ContextId ctxId, 
 }
 
 int sceNpMatching2AbortContextStart(OrbisNpMatching2ContextId ctxId) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2AbortContextStart, ctxId);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; ret={:#x}", (unsigned long long)(ctxId), (unsigned)(ret));
-    return ret;
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}", ctxId);
+    return ORBIS_OK;
 }
 
 int sceNpMatching2DestroyContext(OrbisNpMatching2ContextId ctxId) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2DestroyContext, ctxId);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; ret={:#x}", (unsigned long long)(ctxId), (unsigned)(ret));
-    return ret;
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}", ctxId);
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    if (!ContextManager::Instance().Destroy(ctxId)) {
+        LOG_ERROR(Lib_NpMatching2, "invalid context id");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_CONTEXT_ID;
+    }
+    return ORBIS_OK;
 }
 
-int sceNpMatching2RegisterLobbyMessageCallback(OrbisNpMatching2ContextId ctxId, OrbisNpMatching2LobbyMessageCallback callback, void* userdata) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2RegisterLobbyMessageCallback, ctxId, callback, userdata);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; callback={}; userdata={}; ret={:#x}", (unsigned long long)(ctxId), (unsigned long long)(callback), fmt::ptr((const void*)(userdata)), (unsigned)(ret));
-    return ret;
+int sceNpMatching2RegisterLobbyMessageCallback(OrbisNpMatching2ContextId ctxId,
+                                               OrbisNpMatching2LobbyMessageCallback callback,
+                                               void* userdata) {
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, userdata = {}", ctxId, userdata);
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    ContextObject* ctx = ContextManager::Instance().Get(ctxId);
+    if (!ctx) {
+        LOG_ERROR(Lib_NpMatching2, "invalid context id");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_CONTEXT_ID;
+    }
+
+    ctx->lobby_message_callback = callback;
+    ctx->lobby_message_callback_arg = userdata;
+    return ORBIS_OK;
 }
 
-int sceNpMatching2RegisterRoomMessageCallback(OrbisNpMatching2ContextId ctxId, OrbisNpMatching2RoomMessageCallback callback, void* userdata) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2RegisterRoomMessageCallback, ctxId, callback, userdata);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; callback={}; userdata={}; ret={:#x}", (unsigned long long)(ctxId), (unsigned long long)(callback), fmt::ptr((const void*)(userdata)), (unsigned)(ret));
-    return ret;
+int sceNpMatching2RegisterRoomMessageCallback(OrbisNpMatching2ContextId ctxId,
+                                              OrbisNpMatching2RoomMessageCallback callback,
+                                              void* userdata) {
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, userdata = {}", ctxId, userdata);
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    ContextObject* ctx = ContextManager::Instance().Get(ctxId);
+    if (!ctx) {
+        LOG_ERROR(Lib_NpMatching2, "invalid context id");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_CONTEXT_ID;
+    }
+
+    ctx->room_message_callback = callback;
+    ctx->room_message_callback_arg = userdata;
+    return ORBIS_OK;
 }
 
 int sceNpMatching2GetMemoryInfo() {
@@ -345,39 +738,150 @@ int sceNpMatching2GetLobbyMemberDataInternalList() {
 }
 
 int sceNpMatching2GetRoomDataExternalList(OrbisNpMatching2ContextId ctxId, OrbisNpMatching2GetRoomDataExternalListRequest* request, OrbisNpMatching2RequestOptParam* requestOpt, OrbisNpMatching2RequestId* requestId) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2GetRoomDataExternalList, ctxId, request, requestOpt, requestId);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; request={}; requestOpt={}; requestId={}; ret={:#x}", (unsigned long long)(ctxId), fmt::ptr((const void*)(request)), fmt::ptr((const void*)(requestOpt)), fmt::ptr((const void*)(requestId)), (unsigned)(ret));
-    return ret;
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, requestOpt = {}", ctxId, fmt::ptr(requestOpt));
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    if (!request || !requestId) {
+        LOG_ERROR(Lib_NpMatching2, "request or requestId null");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_ARGUMENT;
+    }
+
+    ContextObject* ctx = ContextManager::Instance().Get(ctxId);
+    if (!ctx) {
+        LOG_ERROR(Lib_NpMatching2, "invalid context id");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_CONTEXT_ID;
+    }
+
+    StoreRequestCallback(ctx, requestOpt);
+    const OrbisNpMatching2RequestId reqId = AllocRequestId();
+    *requestId = reqId;
+    MmGetRoomDataExternalList(ctxId, reqId, *request, ctx->a_variant);
+    return ORBIS_OK;
 }
 
-int sceNpMatching2GetRoomDataInternal(OrbisNpMatching2ContextId ctxId, OrbisNpMatching2GetRoomDataInternalRequest* request, OrbisNpMatching2RequestOptParam* requestOpt, OrbisNpMatching2RequestId* requestId) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2GetRoomDataInternal, ctxId, request, requestOpt, requestId);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; request={}; requestOpt={}; requestId={}; ret={:#x}", (unsigned long long)(ctxId), fmt::ptr((const void*)(request)), fmt::ptr((const void*)(requestOpt)), fmt::ptr((const void*)(requestId)), (unsigned)(ret));
-    return ret;
+int sceNpMatching2GetRoomDataInternal(OrbisNpMatching2ContextId ctxId,
+                                     OrbisNpMatching2GetRoomDataInternalRequest* request,
+                                     OrbisNpMatching2RequestOptParam* requestOpt,
+                                     OrbisNpMatching2RequestId* requestId) {
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, requestOpt = {}", ctxId, fmt::ptr(requestOpt));
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    if (!request || !requestId) {
+        LOG_ERROR(Lib_NpMatching2, "request or requestId null");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_ARGUMENT;
+    }
+
+    ContextObject* ctx = ContextManager::Instance().Get(ctxId);
+    if (!ctx) {
+        LOG_ERROR(Lib_NpMatching2, "invalid context id");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_CONTEXT_ID;
+    }
+
+    StoreRequestCallback(ctx, requestOpt);
+    const OrbisNpMatching2RequestId reqId = AllocRequestId();
+    *requestId = reqId;
+
+    void* request_data = BuildGetRoomDataInternalPayload(*ctx, request->roomId);
+
+    PendingEvent ev{};
+    ev.type = PendingEvent::REQUEST_CB;
+    ev.ctx_id = ctxId;
+    ev.fire_at = std::chrono::steady_clock::now();
+    ev.req_id = reqId;
+    ev.req_event = ORBIS_NP_MATCHING2_REQUEST_EVENT_GET_ROOM_DATA_INTERNAL;
+    ev.error_code = 0;
+    const RequestCallbackInfo request_cb = ConsumeRequestCallback(ctx);
+    ev.request_cb = request_cb.callback;
+    ev.request_cb_arg = request_cb.arg;
+    ev.request_data = request_data;
+    ScheduleEvent(std::move(ev));
+    return ORBIS_OK;
 }
 
 int sceNpMatching2GetRoomMemberDataExternalList(OrbisNpMatching2ContextId ctxId, OrbisNpMatching2GetRoomMemberDataExternalListRequest* request, OrbisNpMatching2RequestOptParam* requestOpt, OrbisNpMatching2RequestId* requestId) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2GetRoomMemberDataExternalList, ctxId, request, requestOpt, requestId);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; request={}; requestOpt={}; requestId={}; ret={:#x}", (unsigned long long)(ctxId), fmt::ptr((const void*)(request)), fmt::ptr((const void*)(requestOpt)), fmt::ptr((const void*)(requestId)), (unsigned)(ret));
-    return ret;
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, requestOpt = {}", ctxId, fmt::ptr(requestOpt));
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    if (!request || !requestId) {
+        LOG_ERROR(Lib_NpMatching2, "request or requestId null");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_ARGUMENT;
+    }
+
+    ContextObject* ctx = ContextManager::Instance().Get(ctxId);
+    if (!ctx) {
+        LOG_ERROR(Lib_NpMatching2, "invalid context id");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_CONTEXT_ID;
+    }
+
+    StoreRequestCallback(ctx, requestOpt);
+    const OrbisNpMatching2RequestId reqId = AllocRequestId();
+    *requestId = reqId;
+    MmGetRoomMemberDataExternalList(ctxId, reqId, *request, ctx->a_variant);
+    return ORBIS_OK;
 }
 
 int sceNpMatching2GetRoomMemberDataInternal() {
-    const int ret = HookContinueWrapperImpl<sceNpMatching2GetRoomMemberDataInternal>::wrap(Detour_sceNpMatching2GetRoomMemberDataInternal);
-    LOG_INFO(Lib_NpMatching2, "ret={:#x}", (unsigned)(ret));
-    return ret;
+    LOG_INFO(Lib_NpMatching2, "called");
+    return ORBIS_OK;
 }
 
 int sceNpMatching2GetUserInfoListA(OrbisNpMatching2ContextId ctxId, OrbisNpMatching2GetUserInfoListRequest* request, OrbisNpMatching2RequestOptParam* requestOpt, OrbisNpMatching2RequestId* requestId) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2GetUserInfoListA, ctxId, request, requestOpt, requestId);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; request={}; requestOpt={}; requestId={}; ret={:#x}", (unsigned long long)(ctxId), fmt::ptr((const void*)(request)), fmt::ptr((const void*)(requestOpt)), fmt::ptr((const void*)(requestId)), (unsigned)(ret));
-    return ret;
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, requestOpt = {}", ctxId, fmt::ptr(requestOpt));
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    if (!request || !requestId) {
+        LOG_ERROR(Lib_NpMatching2, "request or requestId null");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_ARGUMENT;
+    }
+
+    ContextObject* ctx = ContextManager::Instance().Get(ctxId);
+    if (!ctx) {
+        LOG_ERROR(Lib_NpMatching2, "invalid context id");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_CONTEXT_ID;
+    }
+
+    StoreRequestCallback(ctx, requestOpt);
+    const OrbisNpMatching2RequestId reqId = AllocRequestId();
+    *requestId = reqId;
+    MmGetUserInfoList(ctxId, reqId, *request, true);
+    return ORBIS_OK;
 }
 
 int sceNpMatching2GetUserInfoList(OrbisNpMatching2ContextId ctxId, OrbisNpMatching2GetUserInfoListRequest* request, OrbisNpMatching2RequestOptParam* requestOpt, OrbisNpMatching2RequestId* requestId) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2GetUserInfoList, ctxId, request, requestOpt, requestId);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; request={}; requestOpt={}; requestId={}; ret={:#x}", (unsigned long long)(ctxId), fmt::ptr((const void*)(request)), fmt::ptr((const void*)(requestOpt)), fmt::ptr((const void*)(requestId)), (unsigned)(ret));
-    return ret;
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, requestOpt = {}", ctxId, fmt::ptr(requestOpt));
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    if (!request || !requestId) {
+        LOG_ERROR(Lib_NpMatching2, "request or requestId null");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_ARGUMENT;
+    }
+
+    ContextObject* ctx = ContextManager::Instance().Get(ctxId);
+    if (!ctx) {
+        LOG_ERROR(Lib_NpMatching2, "invalid context id");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_CONTEXT_ID;
+    }
+
+    StoreRequestCallback(ctx, requestOpt);
+    const OrbisNpMatching2RequestId reqId = AllocRequestId();
+    *requestId = reqId;
+    MmGetUserInfoList(ctxId, reqId, *request, ctx->a_variant);
+    return ORBIS_OK;
 }
 
 int sceNpMatching2GrantRoomOwner(OrbisNpMatching2ContextId ctxId, void* reqParam, void* optParam, s32* reqId) {
@@ -393,15 +897,53 @@ int sceNpMatching2JoinLobby(OrbisNpMatching2ContextId ctxId, void* reqParam, voi
 }
 
 int sceNpMatching2JoinRoomA(OrbisNpMatching2ContextId ctxId, OrbisNpMatching2JoinRoomRequestA* request, OrbisNpMatching2RequestOptParam* requestOpt, OrbisNpMatching2RequestId* requestId) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2JoinRoomA, ctxId, request, requestOpt, requestId);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; request={}; requestOpt={}; requestId={}; ret={:#x}", (unsigned long long)(ctxId), fmt::ptr((const void*)(request)), fmt::ptr((const void*)(requestOpt)), fmt::ptr((const void*)(requestId)), (unsigned)(ret));
-    return ret;
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, requestOpt = {}", ctxId, fmt::ptr(requestOpt));
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    if (!request || !requestId) {
+        LOG_ERROR(Lib_NpMatching2, "request or requestId null");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_ARGUMENT;
+    }
+
+    ContextObject* ctx = ContextManager::Instance().Get(ctxId);
+    if (!ctx) {
+        LOG_ERROR(Lib_NpMatching2, "invalid context id");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_CONTEXT_ID;
+    }
+
+    StoreRequestCallback(ctx, requestOpt);
+    const OrbisNpMatching2RequestId reqId = AllocRequestId();
+    *requestId = reqId;
+    MmJoinRoomA(ctxId, reqId, *request);
+    return ORBIS_OK;
 }
 
 int sceNpMatching2KickoutRoomMember(OrbisNpMatching2ContextId ctxId, OrbisNpMatching2KickoutRoomMemberRequest* request, OrbisNpMatching2RequestOptParam* requestOpt, OrbisNpMatching2RequestId* requestId) {
-    const int ret = SHADNET_HOOK_CONTINUE(sceNpMatching2KickoutRoomMember, ctxId, request, requestOpt, requestId);
-    LOG_INFO(Lib_NpMatching2, "ctxId={}; request={}; requestOpt={}; requestId={}; ret={:#x}", (unsigned long long)(ctxId), fmt::ptr((const void*)(request)), fmt::ptr((const void*)(requestOpt)), fmt::ptr((const void*)(requestId)), (unsigned)(ret));
-    return ret;
+    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, requestOpt = {}", ctxId, fmt::ptr(requestOpt));
+
+    if (!IsInitialized()) {
+        LOG_ERROR(Lib_NpMatching2, "not initialized");
+        return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
+    }
+    if (!request || !requestId) {
+        LOG_ERROR(Lib_NpMatching2, "request or requestId null");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_ARGUMENT;
+    }
+
+    ContextObject* ctx = ContextManager::Instance().Get(ctxId);
+    if (!ctx) {
+        LOG_ERROR(Lib_NpMatching2, "invalid context id");
+        return ORBIS_NP_MATCHING2_ERROR_INVALID_CONTEXT_ID;
+    }
+
+    StoreRequestCallback(ctx, requestOpt);
+    const OrbisNpMatching2RequestId reqId = AllocRequestId();
+    *requestId = reqId;
+    MmKickoutRoomMember(ctxId, reqId, *request);
+    return ORBIS_OK;
 }
 
 int sceNpMatching2LeaveLobby() {
