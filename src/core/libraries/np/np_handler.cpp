@@ -62,8 +62,7 @@ void NpHandler::Initialize() {
 
         if (!config.IsShadNetEnabled(user_id)) {
             LOG_NOTIFICATION(NpHandler, "user {} has shadNet disabled", user_id);
-            m_initialized.exchange(false);
-            return;
+            continue; // do not abort logins for other logged-in users
         }
 
         ConnectUser(user_id, hostname, port, config.GetNpId(user_id), config.GetPassword(user_id));
