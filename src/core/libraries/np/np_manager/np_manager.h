@@ -4,6 +4,7 @@
 #pragma once
 
 #include <orbis/NpManager.h>
+#include "core/libraries/np/np_error.h"
 #include "common/types.h"
 #include "core/libraries/np/np_manager/np_callbacks.h"
 

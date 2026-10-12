@@ -181,6 +181,7 @@ set(PLUGIN_LIBS
     -lSceNpManager
     -lSceNpAuth
     -lSceNpScore
+    -lSceNpSignaling
     -lSceNpWebApi
     -lSceNpMatching2
     -lSceSysUtil
@@ -199,9 +200,14 @@ set(COMMON_SOURCES src/common/error.cpp
 )
 
 set(CORE_SOURCES src/core/libraries/kernel/kernel.cpp
+                 src/core/libraries/kernel/kernel_shim.cpp
                  src/core/libraries/network/net.cpp
+                 src/core/libraries/network/net_shim.cpp
+                 src/core/libraries/network/net_util.cpp
+                 src/core/libraries/network/netctl.cpp
                  src/core/libraries/system/user_service.cpp
                  src/core/libraries/np/np_handler.cpp
+                 src/core/libraries/np/np_common.cpp
                  src/core/libraries/np/np_auth.cpp
                  src/core/libraries/np/np_manager/np_manager.cpp
                  src/core/libraries/np/np_manager/np_callbacks.cpp
@@ -209,6 +215,10 @@ set(CORE_SOURCES src/core/libraries/kernel/kernel.cpp
                  src/core/libraries/np/np_web_api/np_web_api.cpp
                  src/core/libraries/np/np_web_api/np_web_api_internal.cpp
                  src/core/libraries/np/np_web_api/np_http_client.cpp
+                 src/core/libraries/np/np_signaling/np_signaling.cpp
+                 src/core/libraries/np/np_signaling/np_signaling_helpers.cpp
+                 src/core/libraries/np/np_signaling/np_signaling_state.cpp
+                 src/core/libraries/np/np_signaling/np_signaling_stubs.cpp
                  src/core/libraries/np/np_matching2/np_matching2.cpp
                  src/core/libraries/np/np_matching2/np_matching2_internal.cpp
                  src/core/libraries/np/np_matching2/np_matching2_mm.cpp

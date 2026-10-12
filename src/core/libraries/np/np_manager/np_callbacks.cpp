@@ -5,6 +5,7 @@
 #include <absl/container/flat_hash_map.h>
 #include "common/logging/log.h"
 #include "core/libraries/np/np_error.h"
+#include "core/libraries/np/np_types.h"
 #include "core/libraries/np/np_handler.h"
 #include "core/libraries/np/np_manager/np_callbacks.h"
 #include "core/libraries/np/np_manager/np_manager.h"

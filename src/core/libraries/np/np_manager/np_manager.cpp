@@ -13,6 +13,7 @@
 #include "common/logging/log.h"
 #include "common/plugin_common.h"
 #include "core/libraries/np/np_error.h"
+#include "core/libraries/np/np_types.h"
 #include "core/libraries/np/np_handler.h"
 #include "core/libraries/np/np_manager/np_callbacks.h"
 #include "core/libraries/np/np_manager/np_manager.h"

@@ -15,6 +15,7 @@
 #include "core/libraries/np/np_manager/np_manager.h"
 #include "core/libraries/np/np_matching2/np_matching2.h"
 #include "core/libraries/np/np_score.h"
+#include "core/libraries/np/np_signaling/np_signaling.h"
 #include "core/libraries/np/np_web_api/np_web_api.h"
 #include "core/libraries/system/user_service.h"
 #include "shadnet/config.h"
@@ -78,6 +79,7 @@ extern "C" s32 client_start() {
     Libraries::Np::NpScore::RegisterHooks();
     Libraries::Np::NpWebApi::RegisterHooks();
     Libraries::Np::NpMatching2::RegisterHooks();
+    Libraries::Np::NpSignaling::RegisterHooks();
 
     // Initialize elfinfo
     auto& game_info = Common::ElfInfo::Instance();
