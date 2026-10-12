@@ -4,6 +4,7 @@
 #include <orbis/UserService.h>
 #include <string.h>
 #include "client_main.h"
+#include "common/hook_diag.h"
 #include "common/logging/log.h"
 #include "common/plugin_common.h"
 #include "core/libraries/np/np_handler.h"
@@ -21,9 +22,11 @@ void RegisterUserServiceHooks() {
         LOG_INFO(Lib_UserService, "sceUserServiceInitialize returned {:#x}", ret);
     }
     SHADNET_HOOK(Libraries::System::UserService, sceUserServiceGetUserName);
+    ShadNetLogHookInstall("us.GetUserName", &Detour_sceUserServiceGetUserName);
     SHADNET_HOOK(Libraries::System::UserService, sceUserServiceInitialize);
     SHADNET_HOOK(Libraries::System::UserService, sceUserServiceInitialize2);
     SHADNET_HOOK(Libraries::System::UserService, sceUserServiceGetEvent);
+    ShadNetLogHookInstall("us.GetEvent", &Detour_sceUserServiceGetEvent);
 }
 
 namespace Libraries::System::UserService {

@@ -9,6 +9,7 @@
 
 #include "core/libraries/np/np_matching2/np_matching2.h"
 
+#include "common/hook_diag.h"
 #include "common/logging/log.h"
 #include "common/plugin_common.h"
 #include "core/libraries/np/np_error.h"
@@ -1050,6 +1051,8 @@ void RegisterNpMatching2Hooks() {
     SHADNET_HOOK(Libraries::Np::NpMatching2, sceNpMatching2SetRoomDataExternal);
     SHADNET_HOOK(Libraries::Np::NpMatching2, sceNpMatching2SetRoomDataInternal);
     SHADNET_HOOK(Libraries::Np::NpMatching2, sceNpMatching2SignalingGetConnectionStatus);
+    ShadNetLogHookInstall("m2.SignalingGetConnectionStatus",
+                          &Detour_sceNpMatching2SignalingGetConnectionStatus);
     SHADNET_HOOK(Libraries::Np::NpMatching2, sceNpMatching2AbortContextStart);
     SHADNET_HOOK(Libraries::Np::NpMatching2, sceNpMatching2DestroyContext);
     SHADNET_HOOK(Libraries::Np::NpMatching2, sceNpMatching2RegisterLobbyMessageCallback);
@@ -1069,21 +1072,31 @@ void RegisterNpMatching2Hooks() {
     SHADNET_HOOK(Libraries::Np::NpMatching2, sceNpMatching2GetUserInfoListA);
     SHADNET_HOOK(Libraries::Np::NpMatching2, sceNpMatching2GetUserInfoList);
     SHADNET_HOOK(Libraries::Np::NpMatching2, sceNpMatching2GrantRoomOwner);
+    ShadNetLogHookInstall("m2.GrantRoomOwner", &Detour_sceNpMatching2GrantRoomOwner);
     SHADNET_HOOK(Libraries::Np::NpMatching2, sceNpMatching2JoinLobby);
+    ShadNetLogHookInstall("m2.JoinLobby", &Detour_sceNpMatching2JoinLobby);
     SHADNET_HOOK(Libraries::Np::NpMatching2, sceNpMatching2JoinRoomA);
     SHADNET_HOOK(Libraries::Np::NpMatching2, sceNpMatching2KickoutRoomMember);
     SHADNET_HOOK(Libraries::Np::NpMatching2, sceNpMatching2LeaveLobby);
     SHADNET_HOOK(Libraries::Np::NpMatching2, sceNpMatching2SendLobbyChatMessage);
     SHADNET_HOOK(Libraries::Np::NpMatching2, sceNpMatching2SendRoomChatMessage);
+    ShadNetLogHookInstall("m2.SendRoomChatMessage", &Detour_sceNpMatching2SendRoomChatMessage);
     SHADNET_HOOK(Libraries::Np::NpMatching2, sceNpMatching2SetLobbyMemberDataInternal);
     SHADNET_HOOK(Libraries::Np::NpMatching2, sceNpMatching2SetRoomMemberDataInternal);
     SHADNET_HOOK(Libraries::Np::NpMatching2, sceNpMatching2SetSignalingOptParam);
     SHADNET_HOOK(Libraries::Np::NpMatching2, sceNpMatching2SignalingGetPeerNetInfo);
     SHADNET_HOOK(Libraries::Np::NpMatching2, sceNpMatching2SignalingGetPingInfo);
+    ShadNetLogHookInstall("m2.SignalingGetPingInfo", &Detour_sceNpMatching2SignalingGetPingInfo);
     SHADNET_HOOK(Libraries::Np::NpMatching2, sceNpMatching2SignalingCancelPeerNetInfo);
     SHADNET_HOOK(Libraries::Np::NpMatching2, sceNpMatching2SignalingGetConnectionInfoA);
+    ShadNetLogHookInstall("m2.SignalingGetConnectionInfoA",
+                          &Detour_sceNpMatching2SignalingGetConnectionInfoA);
     SHADNET_HOOK(Libraries::Np::NpMatching2, sceNpMatching2SignalingGetConnectionInfo);
+    ShadNetLogHookInstall("m2.SignalingGetConnectionInfo",
+                          &Detour_sceNpMatching2SignalingGetConnectionInfo);
     SHADNET_HOOK(Libraries::Np::NpMatching2, sceNpMatching2SignalingGetLocalNetInfo);
+    ShadNetLogHookInstall("m2.SignalingGetLocalNetInfo",
+                          &Detour_sceNpMatching2SignalingGetLocalNetInfo);
     SHADNET_HOOK(Libraries::Np::NpMatching2, sceNpMatching2SignalingGetPeerNetInfoResult);
 }
 
