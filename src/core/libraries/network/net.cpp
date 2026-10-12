@@ -36,9 +36,10 @@ s32 sceNetResolverStartNtoa_hook(s32 rid, const char* hostname, OrbisNetInAddr* 
     if (!IsPlausibleString(hostname)) {
         // Never forward a junk pointer into the real resolver — it dereferences it.
         LOG_WARNING(Lib_Net,
-                    "called, hostname = <bad ptr {:#x}>, rid={}, timeout={}, retry={}, flags={} "
-                    "-> returning EINVAL",
-                    reinterpret_cast<std::uintptr_t>(hostname), rid, timeout, retry, flags);
+                    "called, hostname = <bad ptr {:#x}>, rid={}, timeout={}, retry={}, flags={}, "
+                    "caller={:#x} -> returning EINVAL",
+                    reinterpret_cast<std::uintptr_t>(hostname), rid, timeout, retry, flags,
+                    reinterpret_cast<std::uintptr_t>(__builtin_return_address(0)));
         return kSceNetErrorEINVAL;
     }
     LOG_INFO(Lib_Net, "called, hostname = {}, timeout = {}, retry = {}", hostname, timeout, retry);

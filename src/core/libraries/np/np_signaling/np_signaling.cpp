@@ -8,6 +8,7 @@
 #include "common/singleton.h"
 // error_codes.h: superseded by plugin-side error headers
 #include "common/plugin_common.h"
+#include <orbis/NpSignaling.h>
 #include <orbis/Sysmodule.h>
 #include <orbis/libkernel.h>
 #include "core/libraries/network/net_shim.h"
@@ -884,20 +885,38 @@ sceNpSignalingGetConnectionStatistics(OrbisNpSignalingConnectionStatistics* stat
 // fires. Resolve each export at runtime with sceKernelDlsym (after loading
 // the sysmodule) and install the detours on the real function addresses.
 void RegisterLibraryHooks() {
-    const s32 module = sceSysmoduleLoadModule(ORBIS_SYSMODULE_NP_SIGNALING);
-    if (module < 0) {
-        LOG_ERROR(Lib_NpSignaling,
-                  "cannot load libSceNpSignaling sysmodule ({:#x}); signalling hooks not "
-                  "installed",
-                  static_cast<u32>(module));
-        return;
+    // libSceNpSignaling is a lazily-loaded sysmodule, so the plugin's own
+    // imports for its exports may be unresolved at plugin load. Resolve the
+    // detour targets through, in order: the sysmodule handle, a fresh
+    // LoadStartModule handle, and the import slots themselves (only when they
+    // hold plausible addresses).
+    s32 handle = sceSysmoduleLoadModule(ORBIS_SYSMODULE_NP_SIGNALING);
+    LOG_INFO(Lib_NpSignaling, "RegisterLibraryHooks: sceSysmoduleLoadModule -> {:#x}",
+             static_cast<u32>(handle));
+    if (handle <= 0) {
+        s32 load_res = 0;
+        handle = sceKernelLoadStartModule("/system/common/lib/libSceNpSignaling.sprx", 0, nullptr,
+                                          0, nullptr, &load_res);
+        LOG_INFO(Lib_NpSignaling,
+                 "RegisterLibraryHooks: sceKernelLoadStartModule -> {:#x} (result {:#x})",
+                 static_cast<u32>(handle), static_cast<u32>(load_res));
     }
-    LOG_INFO(Lib_NpSignaling, "NP_SIGNALING module handle = {:#x}", module);
+    LOG_INFO(Lib_NpSignaling,
+             "import sample: CreateContext={:#x} Initialize={:#x} GetConnectionStatus={:#x}",
+             reinterpret_cast<uint64_t>(sceNpSignalingCreateContext),
+             reinterpret_cast<uint64_t>(sceNpSignalingInitialize),
+             reinterpret_cast<uint64_t>(sceNpSignalingGetConnectionStatus));
 
 #define SIGNALING_HOOK(name)                                                                       \
     do {                                                                                           \
         void* addr = nullptr;                                                                      \
-        if (sceKernelDlsym(module, #name, &addr) == 0 && addr != nullptr) {                        \
+        if (handle > 0 && sceKernelDlsym(handle, #name, &addr) == 0 && addr != nullptr) {          \
+            /* resolved through the module table */                                                \
+        } else {                                                                                   \
+            const uint64_t import_addr = reinterpret_cast<uint64_t>(name);                         \
+            addr = import_addr >= 0x10000000 ? reinterpret_cast<void*>(import_addr) : nullptr;     \
+        }                                                                                          \
+        if (addr != nullptr) {                                                                     \
             Detour_Construct(&Detour_##name, DetourMode_x64);                                      \
             Detour_DetourFunction(                                                                 \
                 &Detour_##name, reinterpret_cast<uint64_t>(addr),                                  \
@@ -906,7 +925,7 @@ void RegisterLibraryHooks() {
             LOG_INFO(Lib_NpSignaling, "hooked " #name " @ {:#x}",                                  \
                      reinterpret_cast<uint64_t>(addr));                                            \
         } else {                                                                                   \
-            LOG_ERROR(Lib_NpSignaling, "dlsym failed for " #name);                                 \
+            LOG_ERROR(Lib_NpSignaling, "no address for " #name);                                   \
         }                                                                                          \
     } while (0)
 
