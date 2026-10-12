@@ -4,6 +4,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstring>
 #include <absl/container/flat_hash_map.h>
 #include <orbis/NpManager.h>
 #include "common/singleton.h"
@@ -53,6 +54,42 @@ public:
         return it != m_np_ids.end() ? it->second : OrbisNpId{};
     };
 
+    OrbisNpOnlineId GetOnlineId(s32 user_id) {
+        return GetNpId(user_id).handle;
+    };
+
+    u64 GetAccountId(s32 user_id) {
+        std::lock_guard lock(m_mutex_clients);
+        auto it = m_account_ids.find(user_id);
+        return it != m_account_ids.end() ? it->second : 0;
+    };
+
+    bool HasUser(s32 user_id) {
+        std::lock_guard lock(m_mutex_clients);
+        return m_np_ids.find(user_id) != m_np_ids.end();
+    };
+
+    s32 GetUserIdByOnlineId(const OrbisNpOnlineId& online_id) {
+        std::lock_guard lock(m_mutex_clients);
+        for (const auto& entry : m_np_ids) {
+            if (std::memcmp(entry.second.handle.data, online_id.data,
+                            sizeof(online_id.data)) == 0) {
+                return entry.first;
+            }
+        }
+        return -1;
+    };
+
+    s32 GetUserIdByAccountId(u64 account_id) {
+        std::lock_guard lock(m_mutex_clients);
+        for (const auto& entry : m_account_ids) {
+            if (entry.second == account_id) {
+                return entry.first;
+            }
+        }
+        return -1;
+    };
+
     std::string GetBearerToken(s32 user_id) const;
 
     // State callbacks
@@ -88,6 +125,7 @@ private:
     mutable std::mutex m_mutex_clients;
     absl::flat_hash_map<s32, std::shared_ptr<ShadNet::ShadNetClient>> m_clients;
     absl::flat_hash_map<s32, OrbisNpId> m_np_ids;
+    absl::flat_hash_map<s32, u64> m_account_ids;
 
     // Client callbacks
     void OnFriendQuery(s32 user_id, const ShadNet::NotifyFriendQuery& n);

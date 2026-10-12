@@ -205,6 +205,7 @@ void NpHandler::DisconnectUser(s32 user_id) {
             return;
         client = std::move(it->second);
         m_clients.erase(it);
+        m_account_ids.erase(user_id);
     }
     {
         std::lock_guard lock(m_mutex_friend_state);
@@ -389,6 +390,10 @@ void NpHandler::OnFriendStatus(s32 user_id, const ShadNet::NotifyFriendStatus& n
 void NpHandler::OnLoginResult(s32 user_id, const ShadNet::LoginResult& res) {
     if (res.error != ShadNet::ErrorType::NoError) {
         return;
+    }
+    {
+        std::lock_guard lock(m_mutex_clients);
+        m_account_ids[user_id] = res.userId;
     }
     FriendListSnapshot snap;
     snap.friends.reserve(res.friends.size());

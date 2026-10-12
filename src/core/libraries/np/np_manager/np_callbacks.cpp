@@ -265,7 +265,11 @@ static void DispatchPendingNpStateCallbacks() {
         }
     }
 
+    LOG_INFO(Lib_NpManager, "dispatching {} pending state event(s)", pending_events.size());
     for (auto& event : pending_events) {
+        LOG_INFO(Lib_NpManager, "firing state callbacks: user={} state={} legacy={} toolkit={}",
+                 event.user_id, static_cast<int>(event.state), legacy_callback.func != nullptr,
+                 toolkit_callback.func != nullptr);
         if (legacy_callback.func) {
             legacy_callback.func(event.user_id, event.state,
                                  event.has_np_id ? &event.np_id : nullptr,
@@ -289,6 +293,11 @@ static void DispatchPendingNpStateCallbacks() {
 }
 
 s32 sceNpCheckCallback() {
+    static std::atomic<int> s_check_callback_calls{0};
+    const int call_n = ++s_check_callback_calls;
+    if (call_n <= 4 || call_n % 500 == 0) {
+        LOG_INFO(Lib_NpManager, "called (call #{})", call_n);
+    }
     DispatchPendingNpStateCallbacks();
     std::scoped_lock lk{g_np_callbacks_mutex};
     for (auto& [key, cb] : g_np_callbacks) {
