@@ -12,6 +12,7 @@
 #include "core/libraries/network/net.h"
 #include "core/libraries/np/np_handler.h"
 #include "core/libraries/np/np_manager/np_manager.h"
+#include "core/libraries/np/np_matching2/np_matching2.h"
 #include "core/libraries/np/np_score.h"
 #include "core/libraries/np/np_web_api/np_web_api.h"
 #include "core/libraries/system/user_service.h"
@@ -28,6 +29,7 @@ extern "C" s32 client_start() {
     sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_NP_WEB_API);
 
     sceSysmoduleLoadModule(ORBIS_SYSMODULE_NP_SCORE_RANKING);
+    sceSysmoduleLoadModule(ORBIS_SYSMODULE_NP_MATCHING2);
 
     // Init kernel and UserService hooks
     Libraries::Kernel::Kernel::RegisterHooks();
@@ -41,6 +43,7 @@ extern "C" s32 client_start() {
     Libraries::Np::NpManager::RegisterHooks();
     Libraries::Np::NpScore::RegisterHooks();
     Libraries::Np::NpWebApi::RegisterHooks();
+    Libraries::Np::NpMatching2::RegisterHooks();
 
     // Initialize elfinfo
     auto& game_info = Common::ElfInfo::Instance();
