@@ -910,11 +910,8 @@ void RegisterLibraryHooks() {
 #define SIGNALING_HOOK(name)                                                                       \
     do {                                                                                           \
         void* addr = nullptr;                                                                      \
-        if (handle > 0 && sceKernelDlsym(handle, #name, &addr) == 0 && addr != nullptr) {          \
-            /* resolved through the module table */                                                \
-        } else {                                                                                   \
-            const uint64_t import_addr = reinterpret_cast<uint64_t>(name);                         \
-            addr = import_addr >= 0x10000000 ? reinterpret_cast<void*>(import_addr) : nullptr;     \
+        if (handle > 0) {                                                                          \
+            sceKernelDlsym(handle, #name, &addr);                                                  \
         }                                                                                          \
         if (addr != nullptr) {                                                                     \
             Detour_Construct(&Detour_##name, DetourMode_x64);                                      \
