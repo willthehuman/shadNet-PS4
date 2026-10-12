@@ -20,6 +20,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 
 #include "common/logging/log.h"
 
@@ -58,7 +59,65 @@ static inline std::uint32_t ShadNetFmtQwords(const std::uintptr_t* v, std::uint3
     return i;
 }
 
+static inline void ShadNetLogHookInstall(const char* name, const Detour* d);
+
+// v28 FIX: relocate a leading relative jump in the copied stub prologue.
+//
+// The detour copies the target's first InstructionSize bytes into the stub
+// verbatim. If the prologue begins with a relative jump (e.g. sceNetSocket's
+// forwarder `e9 rel32`), replaying it from the stub jumps to
+// `stub + 5 + rel` — garbage in the stub's own region — which (proven on
+// 2026-10-12, round 23) walked the zero-fill into the *resolver trampoline's*
+// page and hijacked the socket call into the resolver hook, returning EINVAL
+// (0x80410116) to the game and breaking its P2P socket creation.
+//
+// Fix: rewrite the copied region as an ABSOLUTE jump (`ff 25 00 00 00 00
+// <target>`, 14 bytes) to the same destination the original instruction
+// targeted. StubSize is always InstructionSize + 14 with InstructionSize >= 14
+// (SDK-enforced), so the region always fits exactly. The remaining copied
+// bytes (dead code under the original unconditional jump) are NOP-filled.
+static inline bool ShadNetFixupHookStub(const char* name, Detour* d) {
+    if (d == nullptr || d->StubPtr == nullptr || d->StubSize < sizeof(d->JumpInstructions64)) {
+        return false;
+    }
+    auto* stub = static_cast<std::uint8_t*>(d->StubPtr);
+    const std::size_t copied = d->StubSize - sizeof(d->JumpInstructions64);
+    if (copied < 14) {
+        return false;
+    }
+    std::uintptr_t target = 0;
+    bool have_target = false;
+    if (stub[0] == 0xE9) { // jmp rel32
+        std::int32_t rel = 0;
+        std::memcpy(&rel, stub + 1, sizeof(rel));
+        target = reinterpret_cast<std::uintptr_t>(d->FunctionPtr) + 5 +
+                 static_cast<std::int64_t>(rel);
+        have_target = true;
+    } else if (stub[0] == 0xEB) { // jmp rel8
+        const auto rel = static_cast<std::int8_t>(stub[1]);
+        target = reinterpret_cast<std::uintptr_t>(d->FunctionPtr) + 2 +
+                 static_cast<std::int64_t>(rel);
+        have_target = true;
+    }
+    if (!have_target) {
+        return false;
+    }
+    std::uint8_t abs_jmp[14] = {0xFF, 0x25, 0x00, 0x00, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0};
+    std::memcpy(abs_jmp + 6, &target, sizeof(target));
+    std::memcpy(stub, abs_jmp, sizeof(abs_jmp));
+    std::memset(stub + sizeof(abs_jmp), 0x90, copied - sizeof(abs_jmp));
+    LOG_WARNING(Lib_HookDiag,
+                "hookfix[{}]: leading relative jump relocated in stub: orig={:#x} -> "
+                "abs={:#x} (stub {:#x})",
+                name, reinterpret_cast<std::uintptr_t>(d->FunctionPtr), target,
+                reinterpret_cast<std::uintptr_t>(d->StubPtr));
+    return true;
+}
+
 static inline void ShadNetLogHookInstall(const char* name, const Detour* d) {
+    // v28: repair known-breakage prologue copies before dumping. Safe: only
+    // rewrites a stub whose first instruction is an unconditional relative jmp.
+    ShadNetFixupHookStub(name, const_cast<Detour*>(d));
     // The diag function's own address reveals the plugin's runtime base for
     // offline symbolization of every captured address.
     const auto diag_hint = reinterpret_cast<std::uintptr_t>(&ShadNetLogHookInstall);
