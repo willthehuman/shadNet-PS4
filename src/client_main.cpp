@@ -19,7 +19,38 @@
 #include "core/libraries/system/user_service.h"
 #include "shadnet/config.h"
 
+// The GoldHEN plugin loader never invokes .init_array for plugins (the SDK's
+// crt/crtprx.c `_init` calls module_start directly), so run the module's
+// static initializers ourselves before anything else: without this pass every
+// C++ static constructor in the module is skipped and globals (like the
+// matching2 client state) stay zero-initialized, faulting on first use.
+extern "C" {
+extern void (*__init_array_start[])(void) __attribute__((visibility("hidden")));
+extern void (*__init_array_end[])(void) __attribute__((visibility("hidden")));
+}
+
+static void RunPluginStaticInitializers() {
+    const auto count = static_cast<size_t>(__init_array_end - __init_array_start);
+    size_t ran = 0;
+    for (size_t i = 0; i < count; ++i) {
+        void (*fn)() = __init_array_start[i];
+        const auto value = reinterpret_cast<uintptr_t>(fn);
+        if (!fn) {
+            continue;
+        }
+        // Only call entries relocated to the module's runtime address range.
+        // Raw link-time values (if relocations were ever skipped) are rejected
+        // instead of jumping into unmapped memory.
+        if (value >= 0x10000000) {
+            fn();
+            ++ran;
+        }
+    }
+    LOG_INFO(shadNet, "static initializers: ran {}/{}", ran, count);
+}
+
 extern "C" s32 client_start() {
+    RunPluginStaticInitializers();
     LOG_INFO(shadNet, "Initializing shadNet Client");
     // Preload modules used by the plugin
     sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_NET);

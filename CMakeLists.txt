@@ -419,7 +419,7 @@ add_custom_command(
     OUTPUT "${TARGET_PRX}"
     COMMAND ${PLUGIN_LD}
             -m elf_x86_64 -pie
-            --script ${OO_PS4_TOOLCHAIN}/link.x
+            --script ${CMAKE_CURRENT_SOURCE_DIR}/link-plugin.x
             -e _init --eh-frame-hdr
             -L${OO_PS4_TOOLCHAIN}/lib
             -L${GOLDHEN_SDK}
