@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <orbis/Net.h>
 
 #include "common/logging/log.h"
@@ -45,16 +47,58 @@ s32 sceNetResolverStartNtoa_hook(s32 rid, const char* hostname, OrbisNetInAddr* 
                                  s32 retry, s32 flags) {
     if (!IsPlausibleString(hostname)) {
         // Never forward a junk pointer into the real resolver — it dereferences it.
-        // Raw hex dump of everything read off the ABI: identifies the true caller /
-        // argument layout when this fires (seen: ptr 0x2 from game code 0x800821d1e).
-        LOG_WARNING(Lib_Net,
-                    "called with junk hostname; raw rid={:#x} hostname={:#x} addr={:#x} "
-                    "timeout={:#x} retry={:#x} flags={:#x} caller={:#x} -> returning EINVAL",
-                    static_cast<std::uint32_t>(rid),
-                    reinterpret_cast<std::uintptr_t>(hostname),
+        // RAW X-RAY: dump everything needed to identify this call offline —
+        // the caller's code bytes, the top of the stack, and any argument that
+        // points into the low mapped window read as a printable string.
+        const auto caller = reinterpret_cast<std::uintptr_t>(__builtin_return_address(0));
+        char codebytes[97]{};
+        if (caller > 64) {
+            const auto* p = reinterpret_cast<const u8*>(caller - 48);
+            for (int i = 0; i < 48; ++i) {
+                std::snprintf(codebytes + i * 2, 3, "%02x", p[i]);
+            }
+        }
+        LOG_WARNING(Lib_Net, "raw rid={:#x} hostname={:#x} addr={:#x} timeout={:#x} retry={:#x} "
+                             "flags={:#x} caller={:#x} code48={}",
+                    static_cast<std::uint32_t>(rid), reinterpret_cast<std::uintptr_t>(hostname),
                     reinterpret_cast<std::uintptr_t>(addr), static_cast<std::uint32_t>(timeout),
-                    static_cast<std::uint32_t>(retry), static_cast<std::uint32_t>(flags),
-                    reinterpret_cast<std::uintptr_t>(__builtin_return_address(0)));
+                    static_cast<std::uint32_t>(retry), static_cast<std::uint32_t>(flags), caller,
+                    codebytes);
+        std::uintptr_t stack[16]{};
+        std::uintptr_t sp = 0;
+        asm volatile("movq %%rsp, %0" : "=r"(sp));
+        std::memcpy(stack, reinterpret_cast<void*>(sp), sizeof(stack));
+        LOG_WARNING(Lib_Net, "raw stack: {:#x} {:#x} {:#x} {:#x} {:#x} {:#x} {:#x} {:#x} {:#x} "
+                             "{:#x} {:#x} {:#x} {:#x} {:#x} {:#x} {:#x}",
+                    stack[0], stack[1], stack[2], stack[3], stack[4], stack[5], stack[6], stack[7],
+                    stack[8], stack[9], stack[10], stack[11], stack[12], stack[13], stack[14],
+                    stack[15]);
+        const std::uintptr_t args[6] = {static_cast<std::uint32_t>(rid),
+                                        reinterpret_cast<std::uintptr_t>(hostname),
+                                        reinterpret_cast<std::uintptr_t>(addr),
+                                        static_cast<std::uint32_t>(timeout),
+                                        static_cast<std::uint32_t>(retry),
+                                        static_cast<std::uint32_t>(flags)};
+        for (int i = 0; i < 6; ++i) {
+            // Only probe the low window both modules live in — that range is
+            // certainly mapped, so reading is safe. Anything else: skip.
+            if (args[i] >= 0x800000000ull && args[i] < 0x801000000ull) {
+                const char* s = reinterpret_cast<const char*>(args[i]);
+                char probe[33]{};
+                int n = 0;
+                for (; n < 32 && s[n] != '\0'; ++n) {
+                    const char c = s[n];
+                    if (c < 0x20 || c > 0x7e) {
+                        n = -1;
+                        break;
+                    }
+                }
+                if (n >= 3) {
+                    std::memcpy(probe, s, static_cast<size_t>(n));
+                    LOG_WARNING(Lib_Net, "raw arg[{}] as string: {}", i, probe);
+                }
+            }
+        }
         return kSceNetErrorEINVAL;
     }
     LOG_INFO(Lib_Net, "called, hostname = {}, timeout = {}, retry = {}", hostname, timeout, retry);
