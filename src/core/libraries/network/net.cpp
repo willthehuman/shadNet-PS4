@@ -62,31 +62,13 @@ s32 sceNetResolverStartNtoa_hook(s32 rid, const char* hostname, OrbisNetInAddr* 
                                  flags);
 }
 
-HOOK_INIT(sceNetResolverCreate);
-OrbisNetId sceNetResolverCreate_hook(const char* name, s32 memid, s32 flags) {
-    const OrbisNetId rc = SHADNET_HOOK_CONTINUE(sceNetResolverCreate, name, memid, flags);
-    if (IsPlausibleString(name)) {
-        LOG_INFO(Lib_Net, "called, name = {}, memid = {}, flags = {:#x} -> rid {}", name, memid,
-                 flags, rc);
-    } else {
-        LOG_WARNING(Lib_Net, "called, name = <bad ptr {:#x}>, memid = {}, flags = {:#x} -> rid {}",
-                    reinterpret_cast<std::uintptr_t>(name), memid, flags, rc);
-    }
-    return rc;
-}
-
-HOOK_INIT(sceNetResolverDestroy);
-s32 sceNetResolverDestroy_hook(s32 rid) {
-    const s32 rc = SHADNET_HOOK_CONTINUE(sceNetResolverDestroy, rid);
-    LOG_INFO(Lib_Net, "called, rid = {} -> {}", rid, rc);
-    return rc;
-}
-
 void RegisterNetHooks() {
     HOOK(sceNetSocket);
     HOOK(sceNetResolverStartNtoa);
-    HOOK(sceNetResolverCreate);
-    HOOK(sceNetResolverDestroy);
+    // NOTE (2026-10-12): do NOT detour sceNetResolverCreate/Destroy. A build that
+    // registered them made the plugin's own first resolver call return 0x804101C8
+    // (the lazily-bound import breaks when its first call lands on a fresh
+    // detour). The socket-level decode trace covers the same ground safely.
 }
 
 namespace Libraries::Network::Net {
