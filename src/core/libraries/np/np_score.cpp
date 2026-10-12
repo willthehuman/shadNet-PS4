@@ -1,15 +1,20 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <map>
+#include <mutex>
 #include "common/logging/log.h"
 #include "common/plugin_common.h"
+#include "core/libraries/np/np_error.h"
+#include "core/libraries/np/np_handler.h"
 #include "core/libraries/np/np_score.h"
 
 #include "orbis/NpScore.h"
 
 HOOK_INIT(sceNpScoreCreateNpTitleCtx);
-static s32 sceNpScoreCreateNpTitleCtx_hook() {
-    return Libraries::Np::NpScore::sceNpScoreCreateNpTitleCtx();
+static s32 sceNpScoreCreateNpTitleCtx_hook(Libraries::Np::OrbisNpServiceLabel serviceLabel,
+                                           const ::OrbisNpId* selfNpId) {
+    return Libraries::Np::NpScore::sceNpScoreCreateNpTitleCtx(serviceLabel, selfNpId);
 }
 
 HOOK_INIT(sceNpScoreGetFriendsRanking);
@@ -83,8 +88,9 @@ static s32 sceNpScoreChangeModeForOtherSaveDataOwners_hook() {
 }
 
 HOOK_INIT(sceNpScoreCreateNpTitleCtxA);
-static s32 sceNpScoreCreateNpTitleCtxA_hook() {
-    return Libraries::Np::NpScore::sceNpScoreCreateNpTitleCtxA();
+static s32 sceNpScoreCreateNpTitleCtxA_hook(Libraries::Np::OrbisNpServiceLabel serviceLabel,
+                                            s32 selfId) {
+    return Libraries::Np::NpScore::sceNpScoreCreateNpTitleCtxA(serviceLabel, selfId);
 }
 
 HOOK_INIT(sceNpScoreCreateRequest);
@@ -98,8 +104,8 @@ static s32 sceNpScoreCreateTitleCtx_hook() {
 }
 
 HOOK_INIT(sceNpScoreDeleteNpTitleCtx);
-static s32 sceNpScoreDeleteNpTitleCtx_hook() {
-    return Libraries::Np::NpScore::sceNpScoreDeleteNpTitleCtx();
+static s32 sceNpScoreDeleteNpTitleCtx_hook(s32 titleCtxId) {
+    return Libraries::Np::NpScore::sceNpScoreDeleteNpTitleCtx(titleCtxId);
 }
 
 HOOK_INIT(sceNpScoreDeleteRequest);
@@ -329,9 +335,49 @@ static void RegisterLibraryHooks() {
 
 namespace Libraries::Np::NpScore {
 
-s32 sceNpScoreCreateNpTitleCtx() {
-    LOG_ERROR(Lib_NpScore, "(STUBBED) called");
-    return ORBIS_OK;
+namespace {
+struct ScoreTitleCtx {
+    OrbisNpServiceLabel serviceLabel = 0;
+    s32 userId = -1;
+};
+
+// Plain std::mutex: zero-fill construction, safe during the plugin's load-time
+// initializer pass (no pthread calls at load - see client_main.cpp).
+std::mutex g_title_ctx_mutex;
+std::map<OrbisNpScoreTitleCtxId, ScoreTitleCtx> g_title_ctxs;
+OrbisNpScoreTitleCtxId g_next_title_ctx_id = 1;
+} // namespace
+
+s32 sceNpScoreCreateNpTitleCtx(OrbisNpServiceLabel serviceLabel, const ::OrbisNpId* selfNpId) {
+    if (serviceLabel == static_cast<OrbisNpServiceLabel>(ORBIS_NP_INVALID_SERVICE_LABEL)) {
+        LOG_ERROR(Lib_NpScore, "CreateNpTitleCtx: invalid serviceLabel");
+        return ORBIS_NP_COMMUNITY_ERROR_INVALID_ARGUMENT;
+    }
+    if (selfNpId == nullptr) {
+        LOG_ERROR(Lib_NpScore, "CreateNpTitleCtx: selfNpId is null");
+        return ORBIS_NP_COMMUNITY_ERROR_INSUFFICIENT_ARGUMENT;
+    }
+    std::lock_guard lock(g_title_ctx_mutex);
+    if (static_cast<s32>(g_title_ctxs.size()) >= ORBIS_NP_SCORE_MAX_CTX_NUM) {
+        LOG_ERROR(Lib_NpScore, "CreateNpTitleCtx: too many title contexts ({})",
+                  g_title_ctxs.size());
+        return ORBIS_NP_COMMUNITY_ERROR_TOO_MANY_OBJECTS;
+    }
+    const s32 user_id = NpHandler::Instance().GetUserIdByOnlineId(selfNpId->handle);
+    // Idempotent: if the title already has a context for this user, return it.
+    // Bloodborne polls this call in a loop; without reuse each poll would leak
+    // a context and hit ORBIS_NP_SCORE_MAX_CTX_NUM.
+    for (const auto& [cid, ctx] : g_title_ctxs) {
+        if (ctx.serviceLabel == serviceLabel && ctx.userId == user_id) {
+            LOG_DEBUG(Lib_NpScore, "CreateNpTitleCtx: reusing id={} for userId={}", cid, user_id);
+            return static_cast<OrbisNpScoreTitleCtxId>(cid);
+        }
+    }
+    const OrbisNpScoreTitleCtxId id = g_next_title_ctx_id++;
+    g_title_ctxs[id] = ScoreTitleCtx{serviceLabel, user_id};
+    LOG_INFO(Lib_NpScore, "CreateNpTitleCtx id={} serviceLabel={} userId={}", id, serviceLabel,
+             user_id);
+    return id;
 }
 
 s32 sceNpScoreGetFriendsRanking() {
@@ -404,9 +450,26 @@ s32 sceNpScoreChangeModeForOtherSaveDataOwners() {
     return ORBIS_OK;
 }
 
-s32 sceNpScoreCreateNpTitleCtxA() {
-    LOG_ERROR(Lib_NpScore, "(STUBBED) called");
-    return ORBIS_OK;
+s32 sceNpScoreCreateNpTitleCtxA(OrbisNpServiceLabel serviceLabel, s32 selfId) {
+    if (serviceLabel == static_cast<OrbisNpServiceLabel>(ORBIS_NP_INVALID_SERVICE_LABEL)) {
+        LOG_ERROR(Lib_NpScore, "CreateNpTitleCtxA: invalid serviceLabel");
+        return ORBIS_NP_COMMUNITY_ERROR_INVALID_ARGUMENT;
+    }
+    if (!NpHandler::Instance().HasUser(selfId)) {
+        LOG_ERROR(Lib_NpScore, "CreateNpTitleCtxA: userId {} is not signed in to NP", selfId);
+        return ORBIS_NP_ERROR_SIGNED_OUT;
+    }
+    std::lock_guard lock(g_title_ctx_mutex);
+    if (static_cast<s32>(g_title_ctxs.size()) >= ORBIS_NP_SCORE_MAX_CTX_NUM) {
+        LOG_ERROR(Lib_NpScore, "CreateNpTitleCtxA: too many title contexts ({})",
+                  g_title_ctxs.size());
+        return ORBIS_NP_COMMUNITY_ERROR_TOO_MANY_OBJECTS;
+    }
+    const OrbisNpScoreTitleCtxId id = g_next_title_ctx_id++;
+    g_title_ctxs[id] = ScoreTitleCtx{serviceLabel, selfId};
+    LOG_INFO(Lib_NpScore, "CreateNpTitleCtxA id={} serviceLabel={} userId={}", id, serviceLabel,
+             selfId);
+    return id;
 }
 
 s32 sceNpScoreCreateRequest() {
@@ -419,8 +482,13 @@ s32 sceNpScoreCreateTitleCtx() {
     return ORBIS_OK;
 }
 
-s32 sceNpScoreDeleteNpTitleCtx() {
-    LOG_ERROR(Lib_NpScore, "(STUBBED) called");
+s32 sceNpScoreDeleteNpTitleCtx(OrbisNpScoreTitleCtxId titleCtxId) {
+    std::lock_guard lock(g_title_ctx_mutex);
+    if (g_title_ctxs.erase(titleCtxId) == 0) {
+        LOG_ERROR(Lib_NpScore, "DeleteNpTitleCtx: invalid titleCtxId {}", titleCtxId);
+        return ORBIS_NP_COMMUNITY_ERROR_INVALID_ID;
+    }
+    LOG_INFO(Lib_NpScore, "DeleteNpTitleCtx id={}", titleCtxId);
     return ORBIS_OK;
 }
 

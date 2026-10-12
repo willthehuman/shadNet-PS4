@@ -4,10 +4,15 @@
 #pragma once
 
 #include "common/types.h"
+#include "core/libraries/np/np_types.h"
+#include <orbis/NpManager.h>
 
 namespace Libraries::Np::NpScore {
 
-s32 sceNpScoreCreateNpTitleCtx();
+using OrbisNpScoreTitleCtxId = s32;
+constexpr int ORBIS_NP_SCORE_MAX_CTX_NUM = 32;
+
+s32 sceNpScoreCreateNpTitleCtx(OrbisNpServiceLabel serviceLabel, const ::OrbisNpId* selfNpId);
 s32 sceNpScoreGetFriendsRanking();
 s32 sceNpScoreGetFriendsRankingAsync();
 s32 sceNpScoreGetGameData();
@@ -22,10 +27,10 @@ s32 sceNpScoreAbortRequest();
 s32 sceNpScoreCensorComment();
 s32 sceNpScoreCensorCommentAsync();
 s32 sceNpScoreChangeModeForOtherSaveDataOwners();
-s32 sceNpScoreCreateNpTitleCtxA();
+s32 sceNpScoreCreateNpTitleCtxA(OrbisNpServiceLabel serviceLabel, s32 selfId);
 s32 sceNpScoreCreateRequest();
 s32 sceNpScoreCreateTitleCtx();
-s32 sceNpScoreDeleteNpTitleCtx();
+s32 sceNpScoreDeleteNpTitleCtx(OrbisNpScoreTitleCtxId titleCtxId);
 s32 sceNpScoreDeleteRequest();
 s32 sceNpScoreGetBoardInfo();
 s32 sceNpScoreGetBoardInfoAsync();
