@@ -67,6 +67,72 @@ s32 connect_hook(s32 fd, const void* addr, u32 addrlen) {
     return rc;
 }
 
+// Sony P2P titles set P2P-specific socket options (SO_USECRYPTO / SO_USESIGNATURE / ...) on
+// their network sockets. On plain/bridged UDP fds the real stack answers
+// EINVAL/ENOPROTOOPT/EOPNOTSUPP — failures that abort the game's network setup and (observed
+// behavior) lead to "fell back offline". The working PC port's policy is "never fail a socket
+// option — accept unknown ones as no-op" (p2p_sockets.cpp SetSocketOptions). Soften ONLY the
+// option-unsupported class; genuine errors (EBADF etc.) still pass through.
+static bool OptionUnsupported(s32 rc) {
+    if (rc >= 0) {
+        return false;
+    }
+    switch (errno) {
+    case EINVAL:
+        return true;
+#ifdef ENOPROTOOPT
+    case ENOPROTOOPT:
+        return true;
+#endif
+#ifdef EOPNOTSUPP
+    case EOPNOTSUPP: // == ENOTSUP on FreeBSD; one entry covers both
+        return true;
+#endif
+    default:
+        return false;
+    }
+}
+
+HOOK_INIT(setsockopt);
+s32 setsockopt_hook(s32 fd, s32 level, s32 optname, const void* optval, u32 optlen) {
+    const s32 rc = SHADNET_HOOK_CONTINUE(setsockopt, fd, level, optname,
+                                         reinterpret_cast<const void*>(optval),
+                                         static_cast<socklen_t>(optlen));
+    const s32 out = OptionUnsupported(rc) ? 0 : rc;
+    LOG_INFO(Lib_Kernel,
+             "setsockopt(fd={}, level={}, opt={:#x}, len={}) -> {} (raw={}, errno={})", fd, level,
+             optname, optlen, out, rc, errno);
+    return out;
+}
+
+HOOK_INIT(getsockopt);
+s32 getsockopt_hook(s32 fd, s32 level, s32 optname, void* optval, u32* optlen) {
+    const s32 rc = SHADNET_HOOK_CONTINUE(getsockopt, fd, level, optname, optval,
+                                         reinterpret_cast<socklen_t*>(optlen));
+    const s32 out = OptionUnsupported(rc) ? 0 : rc;
+    LOG_INFO(Lib_Kernel, "getsockopt(fd={}, level={}, opt={:#x}) -> {} (raw={}, errno={})", fd,
+             level, optname, out, rc, errno);
+    return out;
+}
+
+// Log-only observers: the game's P2P stack queries names of its sockets during setup.
+// Pure observation — never alters the result.
+HOOK_INIT(getsockname);
+s32 getsockname_hook(s32 fd, void* addr, u32* addrlen) {
+    const s32 rc = SHADNET_HOOK_CONTINUE(getsockname, fd, reinterpret_cast<sockaddr*>(addr),
+                                         reinterpret_cast<socklen_t*>(addrlen));
+    LOG_INFO(Lib_Kernel, "getsockname(fd={}) -> {} [errno={}]", fd, rc, errno);
+    return rc;
+}
+
+HOOK_INIT(getpeername);
+s32 getpeername_hook(s32 fd, void* addr, u32* addrlen) {
+    const s32 rc = SHADNET_HOOK_CONTINUE(getpeername, fd, reinterpret_cast<sockaddr*>(addr),
+                                         reinterpret_cast<socklen_t*>(addrlen));
+    LOG_INFO(Lib_Kernel, "getpeername(fd={}) -> {} [errno={}]", fd, rc, errno);
+    return rc;
+}
+
 HOOK_INIT(sendto);
 s64 sendto_hook(s32 fd, const void* buf, u64 len, s32 flags, const void* addr, u32 addrlen) {
     const s64 rc = SHADNET_HOOK_CONTINUE(sendto, fd, buf, static_cast<size_t>(len), flags,
@@ -117,6 +183,10 @@ void RegisterKernelHooks() {
     HOOK(__sys_socketex);
     HOOK(bind);
     HOOK(connect);
+    HOOK(setsockopt);
+    HOOK(getsockopt);
+    HOOK(getsockname);
+    HOOK(getpeername);
     HOOK(sendto);
     HOOK(recvfrom);
 }
