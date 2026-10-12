@@ -21,6 +21,7 @@
 #include <cstring>
 #include <mutex>
 #include <new>
+#include <pthread.h>
 #include <thread>
 
 #include "common/logging/log.h"
@@ -71,15 +72,31 @@ u32 PS4_SYSV_ABI sceNpMutexInit(Libraries::Kernel::PthreadMutexT* mutex, const c
     if (mutex == nullptr) {
         return ORBIS_NP_ERROR_INVALID_ARGUMENT;
     }
-    *mutex = new (std::nothrow) MutexHandle{};
-    return *mutex != nullptr ? ORBIS_OK : ORBIS_NP_ERROR_OUT_OF_MEMORY;
+    auto* handle = new (std::nothrow) MutexHandle{};
+    if (handle == nullptr) {
+        return ORBIS_NP_ERROR_OUT_OF_MEMORY;
+    }
+    // The automatic std::recursive_mutex constructor leaves the underlying
+    // pthread mutex unusable in the plugin runtime - the first lock faults
+    // inside libkernel. Initialize the native handle explicitly with the
+    // recursive attribute: the same workaround the np_web_api contexts use.
+    pthread_mutexattr_t attr{};
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+    pthread_mutex_init(handle->m.native_handle(), &attr);
+    pthread_mutexattr_destroy(&attr);
+
+    *mutex = handle;
+    return ORBIS_OK;
 }
 
 s32 PS4_SYSV_ABI sceNpMutexDestroy(Libraries::Kernel::PthreadMutexT* mutex) {
     if (mutex == nullptr || *mutex == nullptr) {
         return ORBIS_NP_ERROR_INVALID_ARGUMENT;
     }
-    delete AsMutex(*mutex);
+    auto* handle = AsMutex(*mutex);
+    pthread_mutex_destroy(handle->m.native_handle());
+    delete handle;
     *mutex = nullptr;
     return ORBIS_OK;
 }
