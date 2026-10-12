@@ -14,6 +14,7 @@
 
 #include <arpa/inet.h>
 #include <cerrno>
+#include <cstring>
 #include <fcntl.h>
 #include <mutex>
 #include <netinet/in.h>
@@ -128,13 +129,27 @@ int P2PSignalingSendTo(const void* data, u32 len, u32 dest_addr, u16 dest_port) 
     if (!EnsureP2PTransport()) {
         return -1;
     }
+    // shadNet wire framing: every signalling datagram carries the 4-byte
+    // vport header (src=0xFFFF, dst=0xFFFF) - the server's StripVportHeader
+    // silently drops anything without it, and the PC build prepends the same
+    // in SendFrame.
+    static constexpr u8 kVportHeader[4] = {0xFF, 0xFF, 0xFF, 0xFF};
+    static constexpr u32 kMaxPayload = 512;
+    if (len > kMaxPayload) {
+        LOG_WARNING(Lib_Net, "P2P transport: oversize signalling packet ({})", len);
+        return -1;
+    }
+    u8 frame[4 + kMaxPayload];
+    std::memcpy(frame, kVportHeader, sizeof(kVportHeader));
+    std::memcpy(frame + sizeof(kVportHeader), data, len);
+
     sockaddr_in dst{};
     dst.sin_family = AF_INET;
     dst.sin_port = dest_port; // network order (callers pass wire values)
     dst.sin_addr.s_addr = dest_addr;
-    const ssize_t rc =
-        ::sendto(g_sock, data, len, 0, reinterpret_cast<const sockaddr*>(&dst), sizeof(dst));
-    return static_cast<int>(rc);
+    const ssize_t rc = ::sendto(g_sock, frame, len + sizeof(kVportHeader), 0,
+                                reinterpret_cast<const sockaddr*>(&dst), sizeof(dst));
+    return rc < 0 ? static_cast<int>(rc) : static_cast<int>(len);
 }
 
 int P2PSignalingRecvFrom(void* buf, u32 len, u32* from_addr, u16* from_port) {
@@ -144,13 +159,22 @@ int P2PSignalingRecvFrom(void* buf, u32 len, u32* from_addr, u16* from_port) {
     sockaddr_in src{};
     socklen_t src_len = sizeof(src);
     const ssize_t rc = ::recvfrom(g_sock, buf, len, 0, reinterpret_cast<sockaddr*>(&src), &src_len);
-    if (rc > 0) {
-        if (from_addr != nullptr) {
-            *from_addr = src.sin_addr.s_addr;
-        }
-        if (from_port != nullptr) {
-            *from_port = src.sin_port;
-        }
+    if (rc <= 0) {
+        return static_cast<int>(rc);
+    }
+    if (from_addr != nullptr) {
+        *from_addr = src.sin_addr.s_addr;
+    }
+    if (from_port != nullptr) {
+        *from_port = src.sin_port;
+    }
+    // Strip the vport header when present; the signalling layer consumes the
+    // bare payload (e.g. the 6-byte STUN echo).
+    const auto n = static_cast<size_t>(rc);
+    auto* bytes = static_cast<u8*>(buf);
+    if (n >= 4 && bytes[0] == 0xFF && bytes[1] == 0xFF && bytes[2] == 0xFF && bytes[3] == 0xFF) {
+        std::memmove(bytes, bytes + 4, n - 4);
+        return static_cast<int>(n - 4);
     }
     return static_cast<int>(rc);
 }
